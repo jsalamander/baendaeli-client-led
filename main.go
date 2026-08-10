@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultAPIURL        = "https://www.baendae.li/api/public/tamagotchi"
-	defaultPollInterval  = 30 * time.Second
+	defaultPollInterval  = 2 * time.Second
 	defaultMatrixBinary  = "led-image-viewer"
 	defaultMatrixMapping = "adafruit-hat-pwm"
 )
@@ -178,18 +178,11 @@ func fetchEmotion(ctx context.Context, client *http.Client, url string) (string,
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return "", err
 	}
-	if emotion, ok := findEmotion(payload); ok {
-		return emotion, nil
-	}
-	return "", fmt.Errorf("emotion not found in response")
-}
-
-func findEmotion(payload tamagotchiAPIResponse) (string, bool) {
 	emotion := strings.TrimSpace(payload.Data.Tamagotchi.Emotion)
 	if emotion == "" {
-		return "", false
+		return "", fmt.Errorf("emotion not found in response")
 	}
-	return emotion, true
+	return emotion, nil
 }
 
 func normalizeEmotion(emotion string, fallback string) string {
@@ -202,14 +195,7 @@ func normalizeEmotion(emotion string, fallback string) string {
 	}
 }
 
-func (r *matrixRenderer) Display(emotion string) error {
-	if strings.TrimSpace(emotion) == "" {
-		emotion = "happy"
-	}
-	if emotion != "happy" {
-		emotion = "happy"
-	}
-
+func (r *matrixRenderer) Display(_ string) error {
 	anim := renderHappyEyeAnimation(r.width, r.height)
 
 	tmpFile, err := os.CreateTemp("", "baendaeli-client-led-eye-*.gif")
@@ -283,10 +269,6 @@ func writeGIF(path string, anim *gif.GIF) error {
 	}
 	defer f.Close()
 	return gif.EncodeAll(f, anim)
-}
-
-func renderHappyEye(width, height int) *image.RGBA {
-	return renderHappyEyeFrame(width, height, 0, 0)
 }
 
 func renderHappyEyeAnimation(width, height int) *gif.GIF {
