@@ -40,6 +40,14 @@ type config struct {
 	FallbackEmotion string
 }
 
+type tamagotchiAPIResponse struct {
+	Data struct {
+		Tamagotchi struct {
+			Emotion string `json:"emotion"`
+		} `json:"tamagotchi"`
+	} `json:"data"`
+}
+
 type renderer interface {
 	Display(emotion string) error
 }
@@ -166,7 +174,7 @@ func fetchEmotion(ctx context.Context, client *http.Client, url string) (string,
 		return "", fmt.Errorf("unexpected status: %s", resp.Status)
 	}
 
-	var payload any
+	var payload tamagotchiAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return "", err
 	}
@@ -176,41 +184,12 @@ func fetchEmotion(ctx context.Context, client *http.Client, url string) (string,
 	return "", fmt.Errorf("emotion not found in response")
 }
 
-func findEmotion(payload any) (string, bool) {
-	switch v := payload.(type) {
-	case map[string]any:
-		for _, key := range []string{"emotion", "mood", "state", "status"} {
-			if raw, ok := v[key]; ok {
-				if emotion := extractString(raw); emotion != "" {
-					return emotion, true
-				}
-			}
-		}
-		for _, child := range v {
-			if emotion, ok := findEmotion(child); ok {
-				return emotion, true
-			}
-		}
-	case []any:
-		for _, child := range v {
-			if emotion, ok := findEmotion(child); ok {
-				return emotion, true
-			}
-		}
-	case string:
-		if strings.TrimSpace(v) != "" {
-			return v, true
-		}
+func findEmotion(payload tamagotchiAPIResponse) (string, bool) {
+	emotion := strings.TrimSpace(payload.Data.Tamagotchi.Emotion)
+	if emotion == "" {
+		return "", false
 	}
-	return "", false
-}
-
-func extractString(v any) string {
-	s, ok := v.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(s)
+	return emotion, true
 }
 
 func normalizeEmotion(emotion string, fallback string) string {

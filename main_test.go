@@ -6,13 +6,8 @@ import (
 )
 
 func TestFindEmotionNested(t *testing.T) {
-	payload := map[string]any{
-		"data": map[string]any{
-			"tamagotchi": map[string]any{
-				"emotion": "happy",
-			},
-		},
-	}
+	var payload tamagotchiAPIResponse
+	payload.Data.Tamagotchi.Emotion = "happy"
 
 	emotion, ok := findEmotion(payload)
 	if !ok {
