@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/binary-install/binstaller/main/schema/InstallSpec.json
+schema: v1
+name: baendaeli-client-led
+repo: jsalamander/baendaeli-client-led
+asset:
+  template: ${NAME}_${VERSION}_${OS}_${ARCH}${EXT}
+  default_extension: .tar.gz
+  rules:
+  - when:
+      arch: amd64
+    arch: x86_64
+  naming_convention:
+    os: titlecase
+    arch: lowercase
+checksums:
+  algorithm: sha256
+  template: checksums.txt
+supported_platforms:
+- os: linux
+  arch: amd64
+- os: linux
+  arch: arm64

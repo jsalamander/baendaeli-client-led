@@ -1,0 +1,14 @@
+# API endpoint to poll for current emotion
+BAENDAELI_URL: "https://www.baendae.li/api/public/tamagotchi"
+
+# Poll interval in seconds
+POLL_INTERVAL_SECONDS: 30
+
+# Default emotion if API payload does not include a supported emotion
+FALLBACK_EMOTION: "happy"
+
+# LED matrix executable, usually installed with rpi-rgb-led-matrix
+MATRIX_BINARY: "led-image-viewer"
+
+# Optional command args string; if empty sensible defaults are used
+# MATRIX_ARGS: "--led-rows=64 --led-cols=64 --led-chain=1 --led-parallel=1 --led-gpio-mapping=adafruit-hat-pwm --led-brightness=60 --led-no-drop-privs"
