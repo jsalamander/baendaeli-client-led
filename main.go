@@ -29,12 +29,12 @@ const (
 )
 
 type config struct {
-	APIURL         string
-	PollInterval   time.Duration
-	MatrixBinary   string
-	MatrixArgs     []string
-	Width          int
-	Height         int
+	APIURL          string
+	PollInterval    time.Duration
+	MatrixBinary    string
+	MatrixArgs      []string
+	Width           int
+	Height          int
 	FallbackEmotion string
 }
 
@@ -259,7 +259,7 @@ func renderHappyEye(width, height int) *image.RGBA {
 	fillRect(img, bg)
 
 	cx, cy := float64(width)/2, float64(height)/2
-	outerRadius := math.Min(float64(width), float64(height))*0.42
+	outerRadius := math.Min(float64(width), float64(height)) * 0.42
 	innerRadius := outerRadius * 0.95
 	pupilRadius := outerRadius * 0.24
 	highlightRadius := pupilRadius * 0.28
