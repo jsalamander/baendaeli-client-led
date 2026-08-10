@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
-	"image/png"
+	"image/draw"
+	"image/gif"
 	"log"
 	"math"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type config struct {
 	PollInterval    time.Duration
 	MatrixBinary    string
 	MatrixArgs      []string
+	AnimationTime   time.Duration
 	Width           int
 	Height          int
 	FallbackEmotion string
@@ -45,6 +47,7 @@ type renderer interface {
 type matrixRenderer struct {
 	binary string
 	args   []string
+	anim   time.Duration
 	width  int
 	height int
 }
@@ -57,6 +60,7 @@ func main() {
 	r := &matrixRenderer{
 		binary: cfg.MatrixBinary,
 		args:   cfg.MatrixArgs,
+		anim:   cfg.AnimationTime,
 		width:  cfg.Width,
 		height: cfg.Height,
 	}
@@ -120,11 +124,19 @@ func loadConfig() config {
 		fallbackEmotion = "happy"
 	}
 
+	animationTime := pollInterval
+	if raw := strings.TrimSpace(os.Getenv("ANIMATION_SECONDS")); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			animationTime = time.Duration(seconds) * time.Second
+		}
+	}
+
 	return config{
 		APIURL:          apiURL,
 		PollInterval:    pollInterval,
 		MatrixBinary:    matrixBinary,
 		MatrixArgs:      matrixArgs,
+		AnimationTime:   animationTime,
 		Width:           64,
 		Height:          64,
 		FallbackEmotion: fallbackEmotion,
@@ -219,9 +231,19 @@ func (r *matrixRenderer) Display(emotion string) error {
 		emotion = "happy"
 	}
 
-	img := renderHappyEye(r.width, r.height)
-	outputPath := filepath.Join(os.TempDir(), "baendaeli-client-led-eye.png")
-	if err := writePNG(outputPath, img); err != nil {
+	anim := renderHappyEyeAnimation(r.width, r.height)
+
+	tmpFile, err := os.CreateTemp("", "baendaeli-client-led-eye-*.gif")
+	if err != nil {
+		return err
+	}
+	outputPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	defer os.Remove(outputPath)
+
+	if err := writeGIF(outputPath, anim); err != nil {
 		return err
 	}
 
@@ -230,26 +252,98 @@ func (r *matrixRenderer) Display(emotion string) error {
 	}
 
 	args := append([]string{}, r.args...)
+	if !hasTimingArgs(args) {
+		args = append(args, "-t", formatSeconds(r.anim))
+	}
 	args = append(args, outputPath)
-	cmd := exec.Command(r.binary, args...)
+
+	maxRun := r.anim + 2*time.Second
+	if maxRun < 5*time.Second {
+		maxRun = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), maxRun)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, r.binary, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil
+		}
 		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
 
-func writePNG(path string, img image.Image) error {
+func hasTimingArgs(args []string) bool {
+	for i := range args {
+		arg := args[i]
+		if arg == "-t" || arg == "-w" || arg == "-l" {
+			return true
+		}
+		if strings.HasPrefix(arg, "-t") || strings.HasPrefix(arg, "-w") || strings.HasPrefix(arg, "-l") {
+			return true
+		}
+	}
+	return false
+}
+
+func formatSeconds(d time.Duration) string {
+	seconds := d.Seconds()
+	if seconds <= 0 {
+		seconds = 1
+	}
+	return strconv.FormatFloat(seconds, 'f', 2, 64)
+}
+
+func writeGIF(path string, anim *gif.GIF) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return png.Encode(f, img)
+	return gif.EncodeAll(f, anim)
 }
 
 func renderHappyEye(width, height int) *image.RGBA {
+	return renderHappyEyeFrame(width, height, 0, 0)
+}
+
+func renderHappyEyeAnimation(width, height int) *gif.GIF {
+	timeline := []struct {
+		blink float64
+		look  float64
+		delay int
+	}{
+		{blink: 0.00, look: 0.00, delay: 9},
+		{blink: 0.15, look: 0.08, delay: 4},
+		{blink: 0.55, look: 0.12, delay: 2},
+		{blink: 1.00, look: 0.00, delay: 1},
+		{blink: 0.55, look: -0.12, delay: 2},
+		{blink: 0.15, look: -0.08, delay: 4},
+		{blink: 0.00, look: 0.00, delay: 11},
+	}
+
+	palette := color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{255, 255, 255, 255},
+		color.RGBA{255, 220, 70, 255},
+	}
+
+	anim := &gif.GIF{LoopCount: 0}
+	for _, step := range timeline {
+		frame := renderHappyEyeFrame(width, height, step.blink, step.look)
+		paletted := image.NewPaletted(frame.Bounds(), palette)
+		draw.FloydSteinberg.Draw(paletted, paletted.Rect, frame, image.Point{})
+		anim.Image = append(anim.Image, paletted)
+		anim.Delay = append(anim.Delay, step.delay)
+	}
+
+	return anim
+}
+
+func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	bg := color.RGBA{0, 0, 0, 255}
 	white := color.RGBA{255, 255, 255, 255}
@@ -261,20 +355,25 @@ func renderHappyEye(width, height int) *image.RGBA {
 	cx, cy := float64(width)/2, float64(height)/2
 	outerRadius := math.Min(float64(width), float64(height)) * 0.42
 	innerRadius := outerRadius * 0.95
-	pupilRadius := outerRadius * 0.24
+	pupilRadius := outerRadius * (0.24 - 0.12*blink)
+	if pupilRadius < outerRadius*0.08 {
+		pupilRadius = outerRadius * 0.08
+	}
 	highlightRadius := pupilRadius * 0.28
+	pupilShift := look * outerRadius * 0.25
 
 	fillCircle(img, cx, cy, outerRadius, accent)
 	fillCircle(img, cx, cy, innerRadius, white)
-	fillCircle(img, cx, cy, pupilRadius, black)
-	fillCircle(img, cx-pupilRadius*0.35, cy-pupilRadius*0.35, highlightRadius, white)
+	fillCircle(img, cx+pupilShift, cy, pupilRadius, black)
+	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy-pupilRadius*0.35, highlightRadius, white)
 
 	// smiling eyelid arc
-	arcY := cy + outerRadius*0.15
+	arcY := cy + outerRadius*(0.15+0.45*blink)
+	thickness := 1.2 + 1.4*blink
 	for x := 0; x < width; x++ {
 		xf := float64(x) - cx
-		y := arcY + 0.0035*xf*xf
-		for t := -1.2; t <= 1.2; t += 0.3 {
+		y := arcY + (0.0035+0.0008*blink)*xf*xf
+		for t := -thickness; t <= thickness; t += 0.3 {
 			setSafe(img, x, int(y+t), black)
 		}
 	}

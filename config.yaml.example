@@ -4,6 +4,10 @@ BAENDAELI_URL: "https://www.baendae.li/api/public/tamagotchi"
 # Poll interval in seconds
 POLL_INTERVAL_SECONDS: 30
 
+# How long each animation playback should run before next refresh.
+# Defaults to POLL_INTERVAL_SECONDS when unset.
+# ANIMATION_SECONDS: 30
+
 # Default emotion if API payload does not include a supported emotion
 FALLBACK_EMOTION: "happy"
 
