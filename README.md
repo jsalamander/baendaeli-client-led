@@ -7,7 +7,7 @@ LED eye emotion client for Baendae.li.
 - Polls `https://www.baendae.li/api/public/tamagotchi` on an interval
 - Reads an emotion field from the JSON payload
 - Renders a looping 64x64 animated eye on an RGB matrix panel
-- Supports `happy` and `sad` expressions
+- Supports `happy`, `excited`, `sad`, and `calm` expressions
 - Runs as a systemd service on Raspberry Pi
 
 ## Hardware target
@@ -24,7 +24,7 @@ The binary is configured through environment variables:
 - `ANIMATION_SECONDS` (default: same as `POLL_INTERVAL_SECONDS`)
 - `FALLBACK_EMOTION` (default: `happy`)
 - `MATRIX_BINARY` (default: `led-image-viewer`)
-- `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping)
+- `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping, including a 270-degree counter-clockwise correction)
 - `SOUND_ENABLED` (default: `true`; set to `false` to disable the beep)
 - `SOUND_BINARY` (default: `speaker-test`)
 - `SOUND_ARGS` (optional; defaults to a short 880 Hz tone)
@@ -37,6 +37,19 @@ You can place these in `/opt/baendaeli-client-led/.env` for systemd.
 go test ./...
 go build ./...
 ```
+
+## GIF previews
+
+Generate the same 64x64 looping GIF used by the LED client, without requiring
+the panel:
+
+```bash
+make preview EMOTION=excited
+```
+
+The GIF is written to `previews/excited.gif`. Valid emotions are `happy`,
+`excited`, `sad`, and `calm`. Open the generated GIF in VS Code or a browser to
+review animation changes. Set `OUTPUT` to choose another path.
 
 ## Raspberry Pi install
 

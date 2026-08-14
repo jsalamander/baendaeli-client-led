@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,11 +58,15 @@ type renderer interface {
 }
 
 type matrixRenderer struct {
-	binary string
-	args   []string
-	anim   time.Duration
-	width  int
-	height int
+	binary         string
+	args           []string
+	anim           time.Duration
+	width          int
+	height         int
+	currentEmotion string
+	currentCmd     *exec.Cmd
+	currentCancel  context.CancelFunc
+	currentPath    string
 }
 
 type beepPlayer struct {
@@ -85,6 +90,16 @@ func (p *beepPlayer) Play() error {
 }
 
 func main() {
+	previewEmotion := flag.String("preview", "", "write a GIF preview for an emotion")
+	previewOutput := flag.String("output", "", "GIF preview output path")
+	flag.Parse()
+	if *previewEmotion != "" {
+		if err := writePreview(*previewEmotion, *previewOutput); err != nil {
+			log.Fatalf("preview failed: %v", err)
+		}
+		return
+	}
+
 	cfg := loadConfig()
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 	logger.Printf("starting baendaeli-client-led version=%s", version.AppVersion)
@@ -126,6 +141,21 @@ func main() {
 	}
 }
 
+func writePreview(emotion, outputPath string) error {
+	emotion = normalizeEmotion(emotion, "happy")
+	if outputPath == "" {
+		outputPath = filepath.Join("previews", emotion+".gif")
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return err
+	}
+	if err := writeGIF(outputPath, animationForEmotion(emotion, 64, 64)); err != nil {
+		return err
+	}
+	log.Printf("wrote %s preview to %s", emotion, outputPath)
+	return nil
+}
+
 func loadConfig() config {
 	pollInterval := defaultPollInterval
 	if raw := strings.TrimSpace(os.Getenv("POLL_INTERVAL_SECONDS")); raw != "" {
@@ -145,6 +175,7 @@ func loadConfig() config {
 		"--led-chain=1",
 		"--led-parallel=1",
 		fmt.Sprintf("--led-gpio-mapping=%s", defaultMatrixMapping),
+		"--led-pixel-mapper=Rotate:270",
 		"--led-brightness=60",
 		"--led-no-drop-privs",
 	}
@@ -240,8 +271,12 @@ func normalizeEmotion(emotion string, fallback string) string {
 	switch normalized {
 	case "happy", "happiness", "joy", "smile", "smiling":
 		return "happy"
+	case "excited", "excitement", "thrilled", "energetic":
+		return "excited"
 	case "sad", "sadness", "unhappy", "sorrow", "frown", "frowning":
 		return "sad"
+	case "calm", "relaxed", "peaceful", "serene":
+		return "calm"
 	default:
 		return strings.ToLower(strings.TrimSpace(fallback))
 	}
@@ -251,14 +286,14 @@ func (r *matrixRenderer) Display(emotion string) error {
 	if strings.TrimSpace(emotion) == "" {
 		emotion = "happy"
 	}
-
-	var anim *gif.GIF
-	switch emotion {
-	case "sad":
-		anim = renderSadEyeAnimation(r.width, r.height)
-	default:
-		anim = renderHappyEyeAnimation(r.width, r.height)
+	if emotion == r.currentEmotion && r.currentCmd != nil && r.currentCmd.Process != nil {
+		return nil
 	}
+	if err := r.stop(); err != nil {
+		return err
+	}
+
+	anim := animationForEmotion(emotion, r.width, r.height)
 
 	tmpFile, err := os.CreateTemp("", "baendaeli-client-led-eye-*.gif")
 	if err != nil {
@@ -268,39 +303,63 @@ func (r *matrixRenderer) Display(emotion string) error {
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	defer os.Remove(outputPath)
 
 	if err := writeGIF(outputPath, anim); err != nil {
+		_ = os.Remove(outputPath)
 		return err
 	}
 
 	if _, err := exec.LookPath(r.binary); err != nil {
+		_ = os.Remove(outputPath)
 		return fmt.Errorf("matrix binary not found (%s): %w", r.binary, err)
 	}
 
 	args := append([]string{}, r.args...)
-	if !hasTimingArgs(args) {
-		args = append(args, "-t", formatSeconds(r.anim))
-	}
 	args = append(args, outputPath)
 
-	maxRun := r.anim + 2*time.Second
-	if maxRun < 5*time.Second {
-		maxRun = 5 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), maxRun)
-	defer cancel()
-
+	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, r.binary, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil
-		}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		_ = os.Remove(outputPath)
 		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(stderr.String()))
 	}
+	r.currentEmotion = emotion
+	r.currentCmd = cmd
+	r.currentCancel = cancel
+	r.currentPath = outputPath
 	return nil
+}
+
+func (r *matrixRenderer) stop() error {
+	if r.currentCmd == nil {
+		return nil
+	}
+	r.currentCancel()
+	_ = r.currentCmd.Wait()
+	if r.currentPath != "" {
+		_ = os.Remove(r.currentPath)
+	}
+	r.currentEmotion = ""
+	r.currentCmd = nil
+	r.currentCancel = nil
+	r.currentPath = ""
+	return nil
+}
+
+func animationForEmotion(emotion string, width, height int) *gif.GIF {
+	switch emotion {
+	case "excited":
+		return renderExcitedEyeAnimation(width, height)
+	case "sad":
+		return renderSadEyeAnimation(width, height)
+	case "calm":
+		return renderCalmEyeAnimation(width, height)
+	default:
+		return renderHappyEyeAnimation(width, height)
+	}
 }
 
 func hasTimingArgs(args []string) bool {
@@ -339,19 +398,19 @@ func renderHappyEyeAnimation(width, height int) *gif.GIF {
 		look  float64
 		delay int
 	}{
-		{blink: 0.00, look: 0.00, delay: 9},
-		{blink: 0.15, look: 0.08, delay: 4},
-		{blink: 0.55, look: 0.12, delay: 2},
-		{blink: 1.00, look: 0.00, delay: 1},
-		{blink: 0.55, look: -0.12, delay: 2},
-		{blink: 0.15, look: -0.08, delay: 4},
-		{blink: 0.00, look: 0.00, delay: 11},
+		{blink: 0.00, look: 0.00, delay: 45},
+		{blink: 0.12, look: 0.08, delay: 12},
+		{blink: 0.45, look: 0.12, delay: 10},
+		{blink: 0.80, look: 0.00, delay: 8},
+		{blink: 0.45, look: -0.12, delay: 10},
+		{blink: 0.12, look: -0.08, delay: 12},
+		{blink: 0.00, look: 0.00, delay: 55},
 	}
 
 	palette := color.Palette{
 		color.RGBA{0, 0, 0, 255},
 		color.RGBA{255, 255, 255, 255},
-		color.RGBA{255, 220, 70, 255},
+		color.RGBA{185, 35, 100, 255},
 	}
 
 	anim := &gif.GIF{LoopCount: 0}
@@ -372,19 +431,17 @@ func renderSadEyeAnimation(width, height int) *gif.GIF {
 		look  float64
 		delay int
 	}{
-		{blink: 0.00, look: 0.00, delay: 12},
-		{blink: 0.20, look: -0.06, delay: 3},
-		{blink: 0.75, look: 0.00, delay: 2},
-		{blink: 1.00, look: 0.00, delay: 1},
-		{blink: 0.75, look: 0.06, delay: 2},
-		{blink: 0.20, look: 0.00, delay: 3},
-		{blink: 0.00, look: 0.00, delay: 14},
+		{blink: 0.10, look: 0.00, delay: 45},
+		{blink: 0.24, look: -0.04, delay: 12},
+		{blink: 0.55, look: 0.00, delay: 10},
+		{blink: 0.24, look: 0.04, delay: 12},
+		{blink: 0.10, look: 0.00, delay: 55},
 	}
 
 	palette := color.Palette{
 		color.RGBA{0, 0, 0, 255},
 		color.RGBA{255, 255, 255, 255},
-		color.RGBA{80, 160, 255, 255},
+		color.RGBA{185, 35, 100, 255},
 	}
 
 	anim := &gif.GIF{LoopCount: 0}
@@ -399,12 +456,72 @@ func renderSadEyeAnimation(width, height int) *gif.GIF {
 	return anim
 }
 
+func renderExcitedEyeAnimation(width, height int) *gif.GIF {
+	timeline := []struct {
+		blink float64
+		look  float64
+		delay int
+	}{
+		{blink: 0.00, look: -0.10, delay: 20},
+		{blink: 0.08, look: 0.10, delay: 12},
+		{blink: 0.35, look: 0.00, delay: 8},
+		{blink: 0.08, look: 0.00, delay: 12},
+		{blink: 0.00, look: 0.00, delay: 28},
+	}
+
+	palette := color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{255, 255, 255, 255},
+		color.RGBA{185, 35, 100, 255},
+	}
+	anim := &gif.GIF{LoopCount: 0}
+	for _, step := range timeline {
+		frame := renderExpressionEyeFrame(width, height, step.blink, step.look, 0.04, -0.0025, 0)
+		eyeRadius := math.Min(float64(width), float64(height)) * 0.42
+		drawEyebrow(frame, float64(width)/2, float64(height)/2-eyeRadius*0.92, eyeRadius*0.85, 0.014, 0.020, color.RGBA{185, 35, 100, 255})
+		paletted := image.NewPaletted(frame.Bounds(), palette)
+		draw.FloydSteinberg.Draw(paletted, paletted.Rect, frame, image.Point{})
+		anim.Image = append(anim.Image, paletted)
+		anim.Delay = append(anim.Delay, step.delay)
+	}
+	return anim
+}
+
+func renderCalmEyeAnimation(width, height int) *gif.GIF {
+	timeline := []struct {
+		blink float64
+		look  float64
+		delay int
+	}{
+		{blink: 0.35, look: -0.03, delay: 50},
+		{blink: 0.48, look: 0.00, delay: 16},
+		{blink: 0.35, look: 0.03, delay: 50},
+	}
+
+	palette := color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{255, 255, 255, 255},
+		color.RGBA{185, 35, 100, 255},
+	}
+	anim := &gif.GIF{LoopCount: 0}
+	for _, step := range timeline {
+		frame := renderExpressionEyeFrame(width, height, step.blink, step.look, 0.02, 0.0012, 0)
+		eyeRadius := math.Min(float64(width), float64(height)) * 0.42
+		drawEyebrow(frame, float64(width)/2, float64(height)/2-eyeRadius*0.75, eyeRadius*0.75, 0.001, 0, color.RGBA{185, 35, 100, 255})
+		paletted := image.NewPaletted(frame.Bounds(), palette)
+		draw.FloydSteinberg.Draw(paletted, paletted.Rect, frame, image.Point{})
+		anim.Image = append(anim.Image, paletted)
+		anim.Delay = append(anim.Delay, step.delay)
+	}
+	return anim
+}
+
 func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	bg := color.RGBA{0, 0, 0, 255}
 	white := color.RGBA{255, 255, 255, 255}
 	black := color.RGBA{0, 0, 0, 255}
-	accent := color.RGBA{255, 220, 70, 255}
+	accent := color.RGBA{185, 35, 100, 255}
 
 	fillRect(img, bg)
 
@@ -422,19 +539,20 @@ func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.
 	fillCircle(img, cx, cy, innerRadius, white)
 	fillCircle(img, cx+pupilShift, cy, pupilRadius, black)
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy-pupilRadius*0.35, highlightRadius, white)
-
-	// smiling eyelid arc
-	arcY := cy + outerRadius*(0.15+0.45*blink)
-	thickness := 1.2 + 1.4*blink
-	for x := 0; x < width; x++ {
-		xf := float64(x) - cx
-		y := arcY + (0.0035+0.0008*blink)*xf*xf
-		for t := -thickness; t <= thickness; t += 0.3 {
-			setSafe(img, x, int(y+t), black)
-		}
-	}
+	fillUpperEyelid(img, cx, cy, outerRadius, blink)
+	drawEyebrow(img, cx, cy-outerRadius*0.88, outerRadius*0.80, 0.005, 0, accent)
 
 	return img
+}
+
+func fillUpperEyelid(img *image.RGBA, cx, cy, radius, blink float64) {
+	for x := 0; x < img.Bounds().Dx(); x++ {
+		xf := float64(x) - cx
+		eyelidY := cy - radius*(0.62-0.68*blink) + 0.0035*xf*xf
+		for y := 0; y <= int(eyelidY); y++ {
+			setSafe(img, x, y, color.RGBA{0, 0, 0, 255})
+		}
+	}
 }
 
 func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RGBA {
@@ -442,7 +560,7 @@ func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RG
 	bg := color.RGBA{0, 0, 0, 255}
 	white := color.RGBA{255, 255, 255, 255}
 	black := color.RGBA{0, 0, 0, 255}
-	accent := color.RGBA{80, 160, 255, 255}
+	accent := color.RGBA{185, 35, 100, 255}
 
 	fillRect(img, bg)
 
@@ -458,20 +576,59 @@ func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RG
 
 	fillCircle(img, cx, cy, outerRadius, accent)
 	fillCircle(img, cx, cy, innerRadius, white)
-	fillCircle(img, cx+pupilShift, cy+outerRadius*0.10, pupilRadius, black)
-	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.10-pupilRadius*0.35, highlightRadius, white)
-
-	arcY := cy - outerRadius*(0.15+0.45*blink)
-	thickness := 1.2 + 1.4*blink
-	for x := 0; x < width; x++ {
-		xf := float64(x) - cx
-		y := arcY - (0.0035+0.0008*blink)*xf*xf
-		for t := -thickness; t <= thickness; t += 0.3 {
-			setSafe(img, x, int(y+t), black)
-		}
-	}
+	fillCircle(img, cx+pupilShift, cy+outerRadius*0.12, pupilRadius, black)
+	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.12-pupilRadius*0.35, highlightRadius, white)
+	fillExpressionEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
+	drawEyebrow(img, cx, cy-outerRadius*0.90, outerRadius*0.82, -0.008, -0.10, accent)
 
 	return img
+}
+
+func renderExpressionEyeFrame(width, height int, blink, look, pupilOffset, curve, tilt float64) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	bg := color.RGBA{0, 0, 0, 255}
+	white := color.RGBA{255, 255, 255, 255}
+	black := color.RGBA{0, 0, 0, 255}
+	accent := color.RGBA{185, 35, 100, 255}
+
+	fillRect(img, bg)
+	cx, cy := float64(width)/2, float64(height)/2
+	outerRadius := math.Min(float64(width), float64(height)) * 0.42
+	innerRadius := outerRadius * 0.95
+	pupilRadius := outerRadius * (0.24 - 0.12*blink)
+	if pupilRadius < outerRadius*0.08 {
+		pupilRadius = outerRadius * 0.08
+	}
+	pupilShift := look * outerRadius * 0.25
+	pupilY := cy + outerRadius*pupilOffset
+
+	fillCircle(img, cx, cy, outerRadius, accent)
+	fillCircle(img, cx, cy, innerRadius, white)
+	fillCircle(img, cx+pupilShift, pupilY, pupilRadius, black)
+	fillCircle(img, cx+pupilShift-pupilRadius*0.35, pupilY-pupilRadius*0.35, pupilRadius*0.28, white)
+
+	fillExpressionEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
+	return img
+}
+
+func fillExpressionEyelid(img *image.RGBA, cx, cy, radius, blink, curve, tilt float64) {
+	for x := 0; x < img.Bounds().Dx(); x++ {
+		xf := float64(x) - cx
+		eyelidY := cy - radius*(0.66-0.72*blink) + curve*xf*xf + tilt*xf
+		for y := 0; y <= int(eyelidY); y++ {
+			setSafe(img, x, y, color.RGBA{0, 0, 0, 255})
+		}
+	}
+}
+
+func drawEyebrow(img *image.RGBA, cx, cy, halfWidth, curve, tilt float64, c color.RGBA) {
+	for x := int(cx - halfWidth); x <= int(cx+halfWidth); x++ {
+		xf := float64(x) - cx
+		y := cy + curve*xf*xf + tilt*xf
+		for thickness := -1.4; thickness <= 1.4; thickness += 0.3 {
+			setSafe(img, x, int(y+thickness), c)
+		}
+	}
 }
 
 func fillRect(img *image.RGBA, c color.RGBA) {
