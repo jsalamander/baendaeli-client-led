@@ -46,6 +46,7 @@ type config struct {
 }
 
 type tamagotchiAPIResponse struct {
+	Emotion string `json:"emotion"`
 	Data struct {
 		Tamagotchi struct {
 			Emotion string `json:"emotion"`
@@ -175,7 +176,7 @@ func loadConfig() config {
 		"--led-chain=1",
 		"--led-parallel=1",
 		fmt.Sprintf("--led-gpio-mapping=%s", defaultMatrixMapping),
-		"--led-pixel-mapper=Rotate:270",
+		"--led-pixel-mapper=Rotate:90",
 		"--led-brightness=60",
 		"--led-no-drop-privs",
 	}
@@ -259,7 +260,10 @@ func fetchEmotion(ctx context.Context, client *http.Client, url string) (string,
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return "", err
 	}
-	emotion := strings.TrimSpace(payload.Data.Tamagotchi.Emotion)
+	emotion := strings.TrimSpace(payload.Emotion)
+	if emotion == "" {
+		emotion = strings.TrimSpace(payload.Data.Tamagotchi.Emotion)
+	}
 	if emotion == "" {
 		return "", fmt.Errorf("emotion not found in response")
 	}

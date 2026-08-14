@@ -24,7 +24,7 @@ The binary is configured through environment variables:
 - `ANIMATION_SECONDS` (default: same as `POLL_INTERVAL_SECONDS`)
 - `FALLBACK_EMOTION` (default: `happy`)
 - `MATRIX_BINARY` (default: `led-image-viewer`)
-- `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping, including a 270-degree counter-clockwise correction)
+- `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping, including a 90-degree clockwise correction)
 - `SOUND_ENABLED` (default: `true`; set to `false` to disable the beep)
 - `SOUND_BINARY` (default: `speaker-test`)
 - `SOUND_ARGS` (optional; defaults to a short 880 Hz tone)

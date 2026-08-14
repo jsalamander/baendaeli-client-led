@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"image"
 	"image/color"
 	"image/gif"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +28,21 @@ func TestNormalizeEmotion(t *testing.T) {
 	}
 	if got := normalizeEmotion("angry", "happy"); got != "happy" {
 		t.Fatalf("expected fallback happy, got %q", got)
+	}
+}
+
+func TestFetchEmotionFromTopLevelResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"emotion":"sad"}`))
+	}))
+	defer server.Close()
+
+	emotion, err := fetchEmotion(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("fetchEmotion returned an error: %v", err)
+	}
+	if emotion != "sad" {
+		t.Fatalf("expected sad, got %q", emotion)
 	}
 }
 
@@ -129,7 +147,7 @@ func TestLoadConfigCorrectsPanelRotation(t *testing.T) {
 	cfg := loadConfig()
 	foundRotation := false
 	for _, arg := range cfg.MatrixArgs {
-		if arg == "--led-pixel-mapper=Rotate:270" {
+		if arg == "--led-pixel-mapper=Rotate:90" {
 			foundRotation = true
 			break
 		}
