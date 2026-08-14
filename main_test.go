@@ -108,6 +108,16 @@ func TestDrawEyebrowAddsBlackPixels(t *testing.T) {
 	}
 }
 
+func TestFillLowerEyelidMasksBottomOfEye(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	fillRect(img, color.RGBA{255, 255, 255, 255})
+	fillLowerEyelid(img, 32, 32, 26, 0, 0.0035, 0)
+
+	if got := img.RGBAAt(32, 55); got != (color.RGBA{0, 0, 0, 255}) {
+		t.Fatalf("expected lower eyelid to mask the bottom of the eye, got %#v", got)
+	}
+}
+
 func TestExcitedEyebrowIsVisible(t *testing.T) {
 	anim := renderExcitedEyeAnimation(64, 64)
 	if got := color.RGBAModel.Convert(anim.Image[0].At(32, 8)); got != (color.RGBA{185, 35, 100, 255}) {

@@ -544,6 +544,7 @@ func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.
 	fillCircle(img, cx+pupilShift, cy, pupilRadius, black)
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy-pupilRadius*0.35, highlightRadius, white)
 	fillUpperEyelid(img, cx, cy, outerRadius, blink)
+	fillLowerEyelid(img, cx, cy, outerRadius, blink, 0.0035, 0)
 	drawEyebrow(img, cx, cy-outerRadius*0.88, outerRadius*0.80, 0.005, 0, accent)
 
 	return img
@@ -554,6 +555,16 @@ func fillUpperEyelid(img *image.RGBA, cx, cy, radius, blink float64) {
 		xf := float64(x) - cx
 		eyelidY := cy - radius*(0.62-0.68*blink) + 0.0035*xf*xf
 		for y := 0; y <= int(eyelidY); y++ {
+			setSafe(img, x, y, color.RGBA{0, 0, 0, 255})
+		}
+	}
+}
+
+func fillLowerEyelid(img *image.RGBA, cx, cy, radius, blink, curve, tilt float64) {
+	for x := 0; x < img.Bounds().Dx(); x++ {
+		xf := float64(x) - cx
+		eyelidY := cy + radius*(0.62-0.68*blink) - curve*xf*xf + tilt*xf
+		for y := int(eyelidY); y < img.Bounds().Dy(); y++ {
 			setSafe(img, x, y, color.RGBA{0, 0, 0, 255})
 		}
 	}
@@ -583,6 +594,7 @@ func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RG
 	fillCircle(img, cx+pupilShift, cy+outerRadius*0.12, pupilRadius, black)
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.12-pupilRadius*0.35, highlightRadius, white)
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
+	fillLowerEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
 	drawEyebrow(img, cx, cy-outerRadius*0.90, outerRadius*0.82, -0.008, -0.10, accent)
 
 	return img
@@ -612,6 +624,7 @@ func renderExpressionEyeFrame(width, height int, blink, look, pupilOffset, curve
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, pupilY-pupilRadius*0.35, pupilRadius*0.28, white)
 
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
+	fillLowerEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
 	return img
 }
 
