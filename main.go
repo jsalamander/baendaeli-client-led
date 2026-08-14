@@ -29,6 +29,7 @@ const (
 	defaultMatrixBinary  = "led-image-viewer"
 	defaultMatrixMapping = "adafruit-hat"
 	defaultSoundBinary   = "speaker-test"
+	eyelashCount         = 5
 )
 
 type config struct {
@@ -119,7 +120,10 @@ func main() {
 		emotion, err := fetchEmotion(context.Background(), client, cfg.APIURL)
 		if err != nil {
 			logger.Printf("poll failed: %v", err)
-			emotion = cfg.FallbackEmotion
+			if displayErr := r.DisplayMessage("NETWORK ERROR"); displayErr != nil {
+				logger.Printf("display failed for network error: %v", displayErr)
+			}
+			return
 		}
 		normalized := normalizeEmotion(emotion, cfg.FallbackEmotion)
 		if cfg.SoundEnabled {
@@ -293,11 +297,23 @@ func (r *matrixRenderer) Display(emotion string) error {
 	if emotion == r.currentEmotion && r.currentCmd != nil && r.currentCmd.Process != nil {
 		return nil
 	}
+	return r.displayAnimation(emotion, animationForEmotion(emotion, r.width, r.height))
+}
+
+func (r *matrixRenderer) DisplayMessage(message string) error {
+	if message == "" {
+		return nil
+	}
+	return r.displayAnimation("message:"+message, renderTextAnimation(message, r.width, r.height))
+}
+
+func (r *matrixRenderer) displayAnimation(emotion string, anim *gif.GIF) error {
+	if emotion == r.currentEmotion && r.currentCmd != nil && r.currentCmd.Process != nil {
+		return nil
+	}
 	if err := r.stop(); err != nil {
 		return err
 	}
-
-	anim := animationForEmotion(emotion, r.width, r.height)
 
 	tmpFile, err := os.CreateTemp("", "baendaeli-client-led-eye-*.gif")
 	if err != nil {
@@ -364,6 +380,50 @@ func animationForEmotion(emotion string, width, height int) *gif.GIF {
 	default:
 		return renderHappyEyeAnimation(width, height)
 	}
+}
+
+var bitmapFont = map[rune][]string{
+	'A': {"01110", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'E': {"11111", "10000", "10000", "11110", "10000", "10000", "11111"},
+	'K': {"10001", "10010", "10100", "11000", "10100", "10010", "10001"},
+	'N': {"10001", "11001", "10101", "10011", "10001", "10001", "10001"},
+	'O': {"01110", "10001", "10001", "10001", "10001", "10001", "01110"},
+	'R': {"11110", "10001", "10001", "11110", "10100", "10010", "10001"},
+	'T': {"11111", "00100", "00100", "00100", "00100", "00100", "00100"},
+	'W': {"10001", "10001", "10001", "10101", "10101", "11011", "10001"},
+}
+
+func renderTextAnimation(message string, width, height int) *gif.GIF {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	fillRect(img, color.RGBA{0, 0, 0, 255})
+	lines := strings.Fields(strings.ToUpper(message))
+	lineHeight := 9
+	startY := (height - len(lines)*lineHeight) / 2
+	for lineIndex, line := range lines {
+		lineWidth := len(line)*6 - 1
+		startX := (width - lineWidth) / 2
+		for charIndex, char := range line {
+			pattern, ok := bitmapFont[char]
+			if !ok {
+				continue
+			}
+			for y, row := range pattern {
+				for x, pixel := range row {
+					if pixel == '1' {
+						img.SetRGBA(startX+charIndex*6+x, startY+lineIndex*lineHeight+y, color.RGBA{185, 35, 100, 255})
+					}
+				}
+			}
+		}
+	}
+
+	palette := color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{185, 35, 100, 255},
+	}
+	paletted := image.NewPaletted(img.Bounds(), palette)
+	draw.FloydSteinberg.Draw(paletted, paletted.Rect, img, image.Point{})
+	return &gif.GIF{Image: []*image.Paletted{paletted}, Delay: []int{100}, LoopCount: 0}
 }
 
 func hasTimingArgs(args []string) bool {
@@ -545,6 +605,7 @@ func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy-pupilRadius*0.35, highlightRadius, white)
 	fillUpperEyelid(img, cx, cy, outerRadius, blink)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, 0.0035, 0)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.62, 0.68, 0.0035, 0, accent)
 	drawEyebrow(img, cx, cy-outerRadius*0.88, outerRadius*0.80, 0.005, 0, accent)
 
 	return img
@@ -595,6 +656,7 @@ func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RG
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.12-pupilRadius*0.35, highlightRadius, white)
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, -0.005, 0, accent)
 	drawEyebrow(img, cx, cy-outerRadius*0.90, outerRadius*0.82, -0.008, -0.10, accent)
 
 	return img
@@ -625,6 +687,7 @@ func renderExpressionEyeFrame(width, height int, blink, look, pupilOffset, curve
 
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, curve, tilt, accent)
 	return img
 }
 
@@ -638,6 +701,23 @@ func fillExpressionEyelid(img *image.RGBA, cx, cy, radius, blink, curve, tilt fl
 	}
 }
 
+func drawUpperLashes(img *image.RGBA, cx, cy, radius, blink, lidOffset, blinkScale, curve, tilt float64, c color.RGBA) {
+	for lash := 0; lash < eyelashCount; lash++ {
+		position := -0.56 + float64(lash)*0.28
+		x := cx + radius*position
+		xf := x - cx
+		y := cy - radius*(lidOffset-blinkScale*blink) + curve*xf*xf + tilt*xf
+		direction := 0.0
+		if position < 0 {
+			direction = -1
+		} else if position > 0 {
+			direction = 1
+		}
+		for step := 0; step < 4; step++ {
+			setSafe(img, int(x+direction*float64(step)/2), int(y-float64(step)), c)
+		}
+	}
+}
 func drawEyebrow(img *image.RGBA, cx, cy, halfWidth, curve, tilt float64, c color.RGBA) {
 	for x := int(cx - halfWidth); x <= int(cx+halfWidth); x++ {
 		xf := float64(x) - cx

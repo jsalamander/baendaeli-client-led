@@ -31,6 +31,24 @@ func TestNormalizeEmotion(t *testing.T) {
 	}
 }
 
+func TestEyelashCount(t *testing.T) {
+	if eyelashCount != 5 {
+		t.Fatalf("expected exactly five eyelashes, got %d", eyelashCount)
+	}
+}
+
+func TestRenderNetworkErrorMessage(t *testing.T) {
+	anim := renderTextAnimation("NETWORK ERROR", 64, 64)
+	if len(anim.Image) != 1 || len(anim.Delay) != 1 {
+		t.Fatalf("expected one looping text frame")
+	}
+	if anim.Image[0].Bounds().Dx() != 64 || anim.Image[0].Bounds().Dy() != 64 {
+		t.Fatalf("unexpected network error frame size: %v", anim.Image[0].Bounds())
+	}
+	if anim.Image[0].ColorIndexAt(32, 28) == 0 {
+		t.Fatal("expected visible network error text")
+	}
+}
 func TestFetchEmotionFromTopLevelResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"emotion":"sad"}`))

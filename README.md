@@ -8,6 +8,7 @@ LED eye emotion client for Baendae.li.
 - Reads an emotion field from the JSON payload
 - Renders a looping 64x64 animated eye on an RGB matrix panel
 - Supports `happy`, `excited`, `sad`, and `calm` expressions
+- Shows a `NETWORK ERROR` message on the panel when the API cannot be reached
 - Runs as a systemd service on Raspberry Pi
 
 ## Hardware target
