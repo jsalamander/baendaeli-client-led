@@ -48,7 +48,7 @@ type config struct {
 
 type tamagotchiAPIResponse struct {
 	Emotion string `json:"emotion"`
-	Data struct {
+	Data    struct {
 		Tamagotchi struct {
 			Emotion string `json:"emotion"`
 		} `json:"tamagotchi"`
@@ -462,13 +462,13 @@ func renderHappyEyeAnimation(width, height int) *gif.GIF {
 		look  float64
 		delay int
 	}{
-		{blink: 0.00, look: 0.00, delay: 45},
+		{blink: 0.00, look: 0.00, delay: 400},
 		{blink: 0.12, look: 0.08, delay: 12},
 		{blink: 0.45, look: 0.12, delay: 10},
 		{blink: 0.80, look: 0.00, delay: 8},
 		{blink: 0.45, look: -0.12, delay: 10},
 		{blink: 0.12, look: -0.08, delay: 12},
-		{blink: 0.00, look: 0.00, delay: 55},
+		{blink: 0.00, look: 0.00, delay: 450},
 	}
 
 	palette := color.Palette{
@@ -495,11 +495,11 @@ func renderSadEyeAnimation(width, height int) *gif.GIF {
 		look  float64
 		delay int
 	}{
-		{blink: 0.10, look: 0.00, delay: 45},
+		{blink: 0.10, look: 0.00, delay: 400},
 		{blink: 0.24, look: -0.04, delay: 12},
 		{blink: 0.55, look: 0.00, delay: 10},
 		{blink: 0.24, look: 0.04, delay: 12},
-		{blink: 0.10, look: 0.00, delay: 55},
+		{blink: 0.10, look: 0.00, delay: 450},
 	}
 
 	palette := color.Palette{
@@ -526,11 +526,11 @@ func renderExcitedEyeAnimation(width, height int) *gif.GIF {
 		look  float64
 		delay int
 	}{
-		{blink: 0.00, look: -0.10, delay: 20},
+		{blink: 0.00, look: -0.10, delay: 250},
 		{blink: 0.08, look: 0.10, delay: 12},
 		{blink: 0.35, look: 0.00, delay: 8},
 		{blink: 0.08, look: 0.00, delay: 12},
-		{blink: 0.00, look: 0.00, delay: 28},
+		{blink: 0.00, look: 0.00, delay: 280},
 	}
 
 	palette := color.Palette{
@@ -557,9 +557,9 @@ func renderCalmEyeAnimation(width, height int) *gif.GIF {
 		look  float64
 		delay int
 	}{
-		{blink: 0.35, look: -0.03, delay: 50},
+		{blink: 0.35, look: -0.03, delay: 400},
 		{blink: 0.48, look: 0.00, delay: 16},
-		{blink: 0.35, look: 0.03, delay: 50},
+		{blink: 0.35, look: 0.03, delay: 400},
 	}
 
 	palette := color.Palette{
