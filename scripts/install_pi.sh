@@ -37,6 +37,7 @@ install_matrix_viewer() {
     git \
     make \
     g++ \
+    alsa-utils \
     libgraphicsmagick++-dev \
     libwebp-dev
 

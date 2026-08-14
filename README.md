@@ -7,7 +7,7 @@ LED eye emotion client for Baendae.li.
 - Polls `https://www.baendae.li/api/public/tamagotchi` on an interval
 - Reads an emotion field from the JSON payload
 - Renders a looping 64x64 animated eye on an RGB matrix panel
-- Currently supports one expression: `happy`
+- Supports `happy` and `sad` expressions
 - Runs as a systemd service on Raspberry Pi
 
 ## Hardware target
@@ -25,6 +25,9 @@ The binary is configured through environment variables:
 - `FALLBACK_EMOTION` (default: `happy`)
 - `MATRIX_BINARY` (default: `led-image-viewer`)
 - `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping)
+- `SOUND_ENABLED` (default: `true`; set to `false` to disable the beep)
+- `SOUND_BINARY` (default: `speaker-test`)
+- `SOUND_ARGS` (optional; defaults to a short 880 Hz tone)
 
 You can place these in `/opt/baendaeli-client-led/.env` for systemd.
 
@@ -42,7 +45,8 @@ curl -fsSL https://jsalamander.github.io/baendaeli-client-led/install_pi.sh | su
 ```
 
 The installer also builds and installs `led-image-viewer` from
-`hzeller/rpi-rgb-led-matrix` into `/usr/local/bin`.
+`hzeller/rpi-rgb-led-matrix` into `/usr/local/bin` and installs `alsa-utils`
+for the beep player.
 The systemd service runs as `root` so matrix GPIO access works reliably.
 
 Update later with:

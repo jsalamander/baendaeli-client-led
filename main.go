@@ -26,7 +26,8 @@ const (
 	defaultAPIURL        = "https://www.baendae.li/api/public/tamagotchi"
 	defaultPollInterval  = 2 * time.Second
 	defaultMatrixBinary  = "led-image-viewer"
-	defaultMatrixMapping = "adafruit-hat-pwm"
+	defaultMatrixMapping = "adafruit-hat"
+	defaultSoundBinary   = "speaker-test"
 )
 
 type config struct {
@@ -38,6 +39,9 @@ type config struct {
 	Width           int
 	Height          int
 	FallbackEmotion string
+	SoundEnabled    bool
+	SoundBinary     string
+	SoundArgs       []string
 }
 
 type tamagotchiAPIResponse struct {
@@ -60,6 +64,26 @@ type matrixRenderer struct {
 	height int
 }
 
+type beepPlayer struct {
+	binary string
+	args   []string
+}
+
+func (p *beepPlayer) Play() error {
+	if _, err := exec.LookPath(p.binary); err != nil {
+		return fmt.Errorf("sound binary not found (%s): %w", p.binary, err)
+	}
+
+	cmd := exec.Command(p.binary, p.args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return nil
+}
+
 func main() {
 	cfg := loadConfig()
 	logger := log.New(os.Stdout, "", log.LstdFlags)
@@ -72,6 +96,7 @@ func main() {
 		width:  cfg.Width,
 		height: cfg.Height,
 	}
+	beeper := &beepPlayer{binary: cfg.SoundBinary, args: cfg.SoundArgs}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	pollAndDisplay := func() {
@@ -81,6 +106,11 @@ func main() {
 			emotion = cfg.FallbackEmotion
 		}
 		normalized := normalizeEmotion(emotion, cfg.FallbackEmotion)
+		if cfg.SoundEnabled {
+			if err := beeper.Play(); err != nil {
+				logger.Printf("beep failed: %v", err)
+			}
+		}
 		if err := r.Display(normalized); err != nil {
 			logger.Printf("display failed for emotion=%s: %v", normalized, err)
 			return
@@ -139,6 +169,23 @@ func loadConfig() config {
 		}
 	}
 
+	soundEnabled := true
+	if raw := strings.TrimSpace(os.Getenv("SOUND_ENABLED")); raw != "" {
+		if enabled, err := strconv.ParseBool(raw); err == nil {
+			soundEnabled = enabled
+		}
+	}
+
+	soundBinary := strings.TrimSpace(os.Getenv("SOUND_BINARY"))
+	if soundBinary == "" {
+		soundBinary = defaultSoundBinary
+	}
+
+	soundArgs := []string{"-q", "-t", "sine", "-f", "880", "-l", "1"}
+	if raw := strings.TrimSpace(os.Getenv("SOUND_ARGS")); raw != "" {
+		soundArgs = splitArgs(raw)
+	}
+
 	return config{
 		APIURL:          apiURL,
 		PollInterval:    pollInterval,
@@ -148,6 +195,9 @@ func loadConfig() config {
 		Width:           64,
 		Height:          64,
 		FallbackEmotion: fallbackEmotion,
+		SoundEnabled:    soundEnabled,
+		SoundBinary:     soundBinary,
+		SoundArgs:       soundArgs,
 	}
 }
 
@@ -190,13 +240,25 @@ func normalizeEmotion(emotion string, fallback string) string {
 	switch normalized {
 	case "happy", "happiness", "joy", "smile", "smiling":
 		return "happy"
+	case "sad", "sadness", "unhappy", "sorrow", "frown", "frowning":
+		return "sad"
 	default:
 		return strings.ToLower(strings.TrimSpace(fallback))
 	}
 }
 
-func (r *matrixRenderer) Display(_ string) error {
-	anim := renderHappyEyeAnimation(r.width, r.height)
+func (r *matrixRenderer) Display(emotion string) error {
+	if strings.TrimSpace(emotion) == "" {
+		emotion = "happy"
+	}
+
+	var anim *gif.GIF
+	switch emotion {
+	case "sad":
+		anim = renderSadEyeAnimation(r.width, r.height)
+	default:
+		anim = renderHappyEyeAnimation(r.width, r.height)
+	}
 
 	tmpFile, err := os.CreateTemp("", "baendaeli-client-led-eye-*.gif")
 	if err != nil {
@@ -304,6 +366,39 @@ func renderHappyEyeAnimation(width, height int) *gif.GIF {
 	return anim
 }
 
+func renderSadEyeAnimation(width, height int) *gif.GIF {
+	timeline := []struct {
+		blink float64
+		look  float64
+		delay int
+	}{
+		{blink: 0.00, look: 0.00, delay: 12},
+		{blink: 0.20, look: -0.06, delay: 3},
+		{blink: 0.75, look: 0.00, delay: 2},
+		{blink: 1.00, look: 0.00, delay: 1},
+		{blink: 0.75, look: 0.06, delay: 2},
+		{blink: 0.20, look: 0.00, delay: 3},
+		{blink: 0.00, look: 0.00, delay: 14},
+	}
+
+	palette := color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{255, 255, 255, 255},
+		color.RGBA{80, 160, 255, 255},
+	}
+
+	anim := &gif.GIF{LoopCount: 0}
+	for _, step := range timeline {
+		frame := renderSadEyeFrame(width, height, step.blink, step.look)
+		paletted := image.NewPaletted(frame.Bounds(), palette)
+		draw.FloydSteinberg.Draw(paletted, paletted.Rect, frame, image.Point{})
+		anim.Image = append(anim.Image, paletted)
+		anim.Delay = append(anim.Delay, step.delay)
+	}
+
+	return anim
+}
+
 func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	bg := color.RGBA{0, 0, 0, 255}
@@ -334,6 +429,43 @@ func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.
 	for x := 0; x < width; x++ {
 		xf := float64(x) - cx
 		y := arcY + (0.0035+0.0008*blink)*xf*xf
+		for t := -thickness; t <= thickness; t += 0.3 {
+			setSafe(img, x, int(y+t), black)
+		}
+	}
+
+	return img
+}
+
+func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	bg := color.RGBA{0, 0, 0, 255}
+	white := color.RGBA{255, 255, 255, 255}
+	black := color.RGBA{0, 0, 0, 255}
+	accent := color.RGBA{80, 160, 255, 255}
+
+	fillRect(img, bg)
+
+	cx, cy := float64(width)/2, float64(height)/2
+	outerRadius := math.Min(float64(width), float64(height)) * 0.42
+	innerRadius := outerRadius * 0.95
+	pupilRadius := outerRadius * (0.24 - 0.12*blink)
+	if pupilRadius < outerRadius*0.08 {
+		pupilRadius = outerRadius * 0.08
+	}
+	highlightRadius := pupilRadius * 0.28
+	pupilShift := look * outerRadius * 0.25
+
+	fillCircle(img, cx, cy, outerRadius, accent)
+	fillCircle(img, cx, cy, innerRadius, white)
+	fillCircle(img, cx+pupilShift, cy+outerRadius*0.10, pupilRadius, black)
+	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.10-pupilRadius*0.35, highlightRadius, white)
+
+	arcY := cy - outerRadius*(0.15+0.45*blink)
+	thickness := 1.2 + 1.4*blink
+	for x := 0; x < width; x++ {
+		xf := float64(x) - cx
+		y := arcY - (0.0035+0.0008*blink)*xf*xf
 		for t := -thickness; t <= thickness; t += 0.3 {
 			setSafe(img, x, int(y+t), black)
 		}

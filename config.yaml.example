@@ -15,4 +15,9 @@ FALLBACK_EMOTION: "happy"
 MATRIX_BINARY: "led-image-viewer"
 
 # Optional command args string; if empty sensible defaults are used
-# MATRIX_ARGS: "--led-rows=64 --led-cols=64 --led-chain=1 --led-parallel=1 --led-gpio-mapping=adafruit-hat-pwm --led-brightness=60 --led-no-drop-privs"
+# MATRIX_ARGS: "--led-rows=64 --led-cols=64 --led-chain=1 --led-parallel=1 --led-gpio-mapping=adafruit-hat --led-slowdown-gpio=2 --led-brightness=60 --led-no-drop-privs"
+
+# Play a short 880 Hz tone alongside each rendered expression.
+SOUND_ENABLED: true
+# SOUND_BINARY: "speaker-test"
+# SOUND_ARGS: "-q -t sine -f 880 -l 1"

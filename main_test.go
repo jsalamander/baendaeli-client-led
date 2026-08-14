@@ -9,6 +9,9 @@ func TestNormalizeEmotion(t *testing.T) {
 	if got := normalizeEmotion("JOY", "happy"); got != "happy" {
 		t.Fatalf("expected happy, got %q", got)
 	}
+	if got := normalizeEmotion("sadness", "happy"); got != "sad" {
+		t.Fatalf("expected sad, got %q", got)
+	}
 	if got := normalizeEmotion("angry", "happy"); got != "happy" {
 		t.Fatalf("expected fallback happy, got %q", got)
 	}
@@ -16,6 +19,20 @@ func TestNormalizeEmotion(t *testing.T) {
 
 func TestRenderHappyEyeAnimation(t *testing.T) {
 	anim := renderHappyEyeAnimation(64, 64)
+	if len(anim.Image) == 0 {
+		t.Fatalf("expected at least one animation frame")
+	}
+	if len(anim.Image) != len(anim.Delay) {
+		t.Fatalf("frame and delay lengths differ: %d vs %d", len(anim.Image), len(anim.Delay))
+	}
+	b := anim.Image[0].Bounds()
+	if b.Dx() != 64 || b.Dy() != 64 {
+		t.Fatalf("unexpected frame size: %dx%d", b.Dx(), b.Dy())
+	}
+}
+
+func TestRenderSadEyeAnimation(t *testing.T) {
+	anim := renderSadEyeAnimation(64, 64)
 	if len(anim.Image) == 0 {
 		t.Fatalf("expected at least one animation frame")
 	}
@@ -48,6 +65,24 @@ func TestLoadConfigAnimationOverride(t *testing.T) {
 	cfg := loadConfig()
 	if cfg.AnimationTime != 5*time.Second {
 		t.Fatalf("expected animation time override, got %s", cfg.AnimationTime)
+	}
+}
+
+func TestLoadConfigSoundEnabledByDefault(t *testing.T) {
+	t.Setenv("SOUND_ENABLED", "")
+
+	cfg := loadConfig()
+	if !cfg.SoundEnabled {
+		t.Fatal("expected sound to be enabled by default")
+	}
+}
+
+func TestLoadConfigCanDisableSound(t *testing.T) {
+	t.Setenv("SOUND_ENABLED", "false")
+
+	cfg := loadConfig()
+	if cfg.SoundEnabled {
+		t.Fatal("expected sound to be disabled")
 	}
 }
 
