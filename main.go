@@ -616,9 +616,9 @@ func renderSleepEyeFrame(width, height int, offset float64) *image.RGBA {
 	accent := color.RGBA{185, 35, 100, 255}
 	fillRect(img, color.RGBA{0, 0, 0, 255})
 
-	cx, cy := float64(width)/2, float64(height)/2
+	cx := float64(width) / 2
 	outerRadius := math.Min(float64(width), float64(height)) * 0.42
-	lidY := cy + outerRadius*offset
+	lidY := float64(height)*0.88 + outerRadius*offset
 	const lidCurve = -0.016
 
 	drawClosedLid(img, cx, lidY, outerRadius*0.85, lidCurve, 0, accent)
