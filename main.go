@@ -285,6 +285,8 @@ func normalizeEmotion(emotion string, fallback string) string {
 		return "sad"
 	case "calm", "relaxed", "peaceful", "serene":
 		return "calm"
+	case "sleep", "sleepy", "asleep", "sleeping", "tired", "drowsy":
+		return "sleep"
 	default:
 		return strings.ToLower(strings.TrimSpace(fallback))
 	}
@@ -377,6 +379,8 @@ func animationForEmotion(emotion string, width, height int) *gif.GIF {
 		return renderSadEyeAnimation(width, height)
 	case "calm":
 		return renderCalmEyeAnimation(width, height)
+	case "sleep":
+		return renderSleepEyeAnimation(width, height)
 	default:
 		return renderHappyEyeAnimation(width, height)
 	}
@@ -580,6 +584,71 @@ func renderCalmEyeAnimation(width, height int) *gif.GIF {
 	return anim
 }
 
+func renderSleepEyeAnimation(width, height int) *gif.GIF {
+	timeline := []struct {
+		offset float64
+		delay  int
+	}{
+		{offset: 0.00, delay: 500},
+		{offset: 0.015, delay: 500},
+	}
+
+	palette := color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{185, 35, 100, 255},
+	}
+
+	anim := &gif.GIF{LoopCount: 0}
+	for _, step := range timeline {
+		frame := renderSleepEyeFrame(width, height, step.offset)
+		paletted := image.NewPaletted(frame.Bounds(), palette)
+		draw.FloydSteinberg.Draw(paletted, paletted.Rect, frame, image.Point{})
+		anim.Image = append(anim.Image, paletted)
+		anim.Delay = append(anim.Delay, step.delay)
+	}
+
+	return anim
+}
+
+// renderSleepEyeFrame draws a fully closed lid as a downward-arcing curve with hanging lashes.
+func renderSleepEyeFrame(width, height int, offset float64) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	accent := color.RGBA{185, 35, 100, 255}
+	fillRect(img, color.RGBA{0, 0, 0, 255})
+
+	cx, cy := float64(width)/2, float64(height)/2
+	outerRadius := math.Min(float64(width), float64(height)) * 0.42
+	lidY := cy + outerRadius*offset
+	const lidCurve = -0.016
+
+	drawClosedLid(img, cx, lidY, outerRadius*0.85, lidCurve, 0, accent)
+	drawClosedLashes(img, cx, lidY, outerRadius, lidCurve, accent)
+
+	return img
+}
+
+func drawClosedLid(img *image.RGBA, cx, cy, halfWidth, curve, tilt float64, c color.RGBA) {
+	for x := int(cx - halfWidth); x <= int(cx+halfWidth); x++ {
+		xf := float64(x) - cx
+		y := cy + curve*xf*xf + tilt*xf
+		for thickness := -1.5; thickness <= 1.5; thickness += 0.3 {
+			setSafe(img, x, int(y+thickness), c)
+		}
+	}
+}
+
+func drawClosedLashes(img *image.RGBA, cx, cy, radius, curve float64, c color.RGBA) {
+	for lash := 0; lash < eyelashCount; lash++ {
+		position := -0.56 + float64(lash)*0.28
+		x := cx + radius*position
+		xf := x - cx
+		y := cy + curve*xf*xf
+		for step := 0; step < 4; step++ {
+			setSafe(img, int(x), int(y+float64(step)), c)
+		}
+	}
+}
+
 func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	bg := color.RGBA{0, 0, 0, 255}
@@ -605,7 +674,7 @@ func renderHappyEyeFrame(width, height int, blink float64, look float64) *image.
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy-pupilRadius*0.35, highlightRadius, white)
 	fillUpperEyelid(img, cx, cy, outerRadius, blink)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, 0.0035, 0)
-	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.62, 0.68, 0.0035, 0, accent)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.62, 0.68, 0.0035, 0, 4, accent)
 	drawEyebrow(img, cx, cy-outerRadius*0.88, outerRadius*0.80, 0.005, 0, accent)
 
 	return img
@@ -656,7 +725,7 @@ func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RG
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.12-pupilRadius*0.35, highlightRadius, white)
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
-	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, -0.005, 0, accent)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, -0.005, 0, 24, accent)
 	drawEyebrow(img, cx, cy-outerRadius*0.90, outerRadius*0.82, -0.008, -0.10, accent)
 
 	return img
@@ -687,7 +756,7 @@ func renderExpressionEyeFrame(width, height int, blink, look, pupilOffset, curve
 
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, curve, tilt)
-	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, curve, tilt, accent)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, curve, tilt, 4, accent)
 	return img
 }
 
@@ -701,7 +770,7 @@ func fillExpressionEyelid(img *image.RGBA, cx, cy, radius, blink, curve, tilt fl
 	}
 }
 
-func drawUpperLashes(img *image.RGBA, cx, cy, radius, blink, lidOffset, blinkScale, curve, tilt float64, c color.RGBA) {
+func drawUpperLashes(img *image.RGBA, cx, cy, radius, blink, lidOffset, blinkScale, curve, tilt float64, length int, c color.RGBA) {
 	for lash := 0; lash < eyelashCount; lash++ {
 		position := -0.56 + float64(lash)*0.28
 		x := cx + radius*position
@@ -713,7 +782,7 @@ func drawUpperLashes(img *image.RGBA, cx, cy, radius, blink, lidOffset, blinkSca
 		} else if position > 0 {
 			direction = 1
 		}
-		for step := 0; step < 4; step++ {
+		for step := 0; step < length; step++ {
 			setSafe(img, int(x+direction*float64(step)/2), int(y-float64(step)), c)
 		}
 	}

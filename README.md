@@ -7,7 +7,7 @@ LED eye emotion client for Baendae.li.
 - Polls `https://www.baendae.li/api/public/tamagotchi` on an interval
 - Reads an emotion field from the JSON payload
 - Renders a looping 64x64 animated eye on an RGB matrix panel
-- Supports `happy`, `excited`, `sad`, and `calm` expressions
+- Supports `happy`, `excited`, `sad`, `calm`, and `sleep` expressions
 - Shows a `NETWORK ERROR` message on the panel when the API cannot be reached
 - Runs as a systemd service on Raspberry Pi
 
@@ -49,7 +49,7 @@ make preview EMOTION=excited
 ```
 
 The GIF is written to `previews/excited.gif`. Valid emotions are `happy`,
-`excited`, `sad`, and `calm`. Open the generated GIF in VS Code or a browser to
+`excited`, `sad`, `calm`, and `sleep`. Open the generated GIF in VS Code or a browser to
 review animation changes. Set `OUTPUT` to choose another path.
 
 ## Raspberry Pi install

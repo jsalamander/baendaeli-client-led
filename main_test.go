@@ -26,6 +26,9 @@ func TestNormalizeEmotion(t *testing.T) {
 	if got := normalizeEmotion("calm", "happy"); got != "calm" {
 		t.Fatalf("expected calm, got %q", got)
 	}
+	if got := normalizeEmotion("sleepy", "happy"); got != "sleep" {
+		t.Fatalf("expected sleep, got %q", got)
+	}
 	if got := normalizeEmotion("angry", "happy"); got != "happy" {
 		t.Fatalf("expected fallback happy, got %q", got)
 	}
@@ -143,8 +146,22 @@ func TestExcitedEyebrowIsVisible(t *testing.T) {
 	}
 }
 
+func TestRenderSleepEyeAnimation(t *testing.T) {
+	anim := renderSleepEyeAnimation(64, 64)
+	if len(anim.Image) == 0 {
+		t.Fatalf("expected at least one animation frame")
+	}
+	if len(anim.Image) != len(anim.Delay) {
+		t.Fatalf("frame and delay lengths differ: %d vs %d", len(anim.Image), len(anim.Delay))
+	}
+	b := anim.Image[0].Bounds()
+	if b.Dx() != 64 || b.Dy() != 64 {
+		t.Fatalf("unexpected frame size: %dx%d", b.Dx(), b.Dy())
+	}
+}
+
 func TestAllEmotionAnimations(t *testing.T) {
-	for _, emotion := range []string{"happy", "excited", "sad", "calm"} {
+	for _, emotion := range []string{"happy", "excited", "sad", "calm", "sleep"} {
 		anim := animationForEmotion(emotion, 64, 64)
 		if len(anim.Image) == 0 || len(anim.Image) != len(anim.Delay) {
 			t.Fatalf("invalid animation for %q", emotion)
