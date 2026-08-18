@@ -39,6 +39,20 @@ go test ./...
 go build ./...
 ```
 
+To hear the generated emotion loops in `--manual` mode on Linux, install the
+ALSA utilities, which provide the default `speaker-test` audio backend:
+
+```bash
+sudo apt-get install alsa-utils
+```
+
+Then build and run the local debug binary:
+
+```bash
+make debug
+./baendaeli-client-led-debug --manual
+```
+
 ## GIF previews
 
 Generate the same 64x64 looping GIF used by the LED client, without requiring

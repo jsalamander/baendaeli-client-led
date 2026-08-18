@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/gif"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -21,15 +24,18 @@ import (
 	"time"
 
 	"github.com/jsalamander/baendaeli-client-led/internal/version"
+	"golang.org/x/sys/unix"
 )
 
 const (
-	defaultAPIURL        = "https://www.baendae.li/api/public/tamagotchi"
-	defaultPollInterval  = 2 * time.Second
-	defaultMatrixBinary  = "led-image-viewer"
-	defaultMatrixMapping = "adafruit-hat"
-	defaultSoundBinary   = "speaker-test"
-	eyelashCount         = 5
+	defaultAPIURL           = "https://www.baendae.li/api/public/tamagotchi"
+	defaultPollInterval     = 2 * time.Second
+	defaultMatrixBinary     = "led-image-viewer"
+	defaultMatrixMapping    = "adafruit-hat"
+	defaultSoundBinary      = "speaker-test"
+	defaultLocalSoundDevice = "default"
+	defaultProdSoundDevice  = "plughw:1,0"
+	eyelashCount            = 5
 )
 
 type config struct {
@@ -72,37 +78,157 @@ type matrixRenderer struct {
 }
 
 type beepPlayer struct {
-	binary string
-	args   []string
+	binary            string
+	args              []string
+	currentEmotion    string
+	currentCmd        *exec.Cmd
+	currentCancel     context.CancelFunc
+	currentPath       string
+	warnedUnavailable bool
 }
 
-func (p *beepPlayer) Play() error {
-	if _, err := exec.LookPath(p.binary); err != nil {
-		return fmt.Errorf("sound binary not found (%s): %w", p.binary, err)
+func resolveSoundBinary(binary string) string {
+	for _, candidate := range []string{binary, "ffplay", "play", "aplay"} {
+		if candidate == "" {
+			continue
+		}
+		if _, err := exec.LookPath(candidate); err == nil {
+			return candidate
+		}
 	}
+	return binary
+}
 
-	cmd := exec.Command(p.binary, p.args...)
-	if err := cmd.Start(); err != nil {
+func (p *beepPlayer) stop() error {
+	if p.currentCmd == nil {
+		return nil
+	}
+	if p.currentCancel != nil {
+		p.currentCancel()
+	}
+	_ = p.currentCmd.Wait()
+	if p.currentPath != "" {
+		_ = os.Remove(p.currentPath)
+	}
+	p.currentEmotion = ""
+	p.currentCmd = nil
+	p.currentCancel = nil
+	p.currentPath = ""
+	return nil
+}
+
+func (p *beepPlayer) PlayEmotion(emotion string) error {
+	emotion = normalizeEmotion(emotion, "happy")
+	if emotion == "" {
+		emotion = "happy"
+	}
+	p.binary = resolveSoundBinary(p.binary)
+	if _, err := exec.LookPath(p.binary); err != nil {
+		if !p.warnedUnavailable {
+			log.Printf("sound binary unavailable (%s): %v; install alsa-utils for speaker-test or configure SOUND_BINARY", p.binary, err)
+			p.warnedUnavailable = true
+		}
+		return nil
+	}
+	if p.currentEmotion == emotion && p.currentCmd != nil && p.currentCmd.Process != nil {
+		return nil
+	}
+	if err := p.stop(); err != nil {
 		return err
 	}
-	go func() {
-		_ = cmd.Wait()
-	}()
+	samples := emotionLoopSamples(emotion)
+	path, err := os.CreateTemp("", "baendaeli-client-led-sound-*.wav")
+	if err != nil {
+		return err
+	}
+	path.Close()
+	outputPath := path.Name()
+	if err := writeWAV(outputPath, samples); err != nil {
+		_ = os.Remove(outputPath)
+		return err
+	}
+	cmdArgs := append([]string{}, p.args...)
+	if p.binary == "ffplay" || p.binary == "play" {
+		cmdArgs = []string{"-nodisp", "-autoexit", "-loop", "0", outputPath}
+		if p.binary == "play" {
+			cmdArgs = []string{"-q", outputPath, "repeat", "0"}
+		}
+	} else if p.binary == "aplay" {
+		cmdArgs = []string{"-q", "--loop=0", outputPath}
+	} else if p.binary == "speaker-test" {
+		cmdArgs = []string{"-q", "-t", "sine", "-f", fmt.Sprintf("%d", emotionBaseFrequency(emotion)), "-l", "0"}
+		_ = os.Remove(outputPath)
+		outputPath = ""
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, p.binary, cmdArgs...)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		if outputPath != "" {
+			_ = os.Remove(outputPath)
+		}
+		return err
+	}
+	p.currentEmotion = emotion
+	p.currentCmd = cmd
+	p.currentCancel = cancel
+	p.currentPath = outputPath
 	return nil
+}
+
+func emotionBaseFrequency(emotion string) int {
+	switch emotion {
+	case "excited":
+		return 880
+	case "sad":
+		return 220
+	case "calm":
+		return 392
+	case "sleep":
+		return 174
+	default:
+		return 659
+	}
 }
 
 func main() {
 	previewEmotion := flag.String("preview", "", "write a GIF preview for an emotion")
 	previewOutput := flag.String("output", "", "GIF preview output path")
+	soundPreviewEmotion := flag.String("sound-preview", "", "write a WAV preview for an emotion")
+	soundPreviewOutput := flag.String("sound-output", "", "WAV preview output path")
+	manualMode := flag.Bool("manual", false, "interactive manual emotion selector")
+	manualEmotion := flag.String("emotion", "", "manual emotion to render and play immediately")
 	flag.Parse()
 	if *previewEmotion != "" {
 		if err := writePreview(*previewEmotion, *previewOutput); err != nil {
 			log.Fatalf("preview failed: %v", err)
 		}
+	}
+	if *soundPreviewEmotion != "" {
+		if err := writeSoundPreview(*soundPreviewEmotion, *soundPreviewOutput); err != nil {
+			log.Fatalf("sound preview failed: %v", err)
+		}
+	}
+	if *previewEmotion != "" || *soundPreviewEmotion != "" {
 		return
 	}
 
 	cfg := loadConfig()
+	if *manualMode || *manualEmotion != "" {
+		if *manualEmotion == "" {
+			if err := runManualEmotionMode(cfg, ""); err != nil {
+				log.Fatalf("manual mode failed: %v", err)
+			}
+			return
+		}
+		if emotion, ok := parseManualEmotion(*manualEmotion); ok {
+			if err := runManualEmotionMode(cfg, emotion); err != nil {
+				log.Fatalf("manual emotion failed: %v", err)
+			}
+			return
+		}
+		log.Fatalf("invalid manual emotion %q", *manualEmotion)
+	}
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 	logger.Printf("starting baendaeli-client-led version=%s", version.AppVersion)
 
@@ -127,7 +253,7 @@ func main() {
 		}
 		normalized := normalizeEmotion(emotion, cfg.FallbackEmotion)
 		if cfg.SoundEnabled {
-			if err := beeper.Play(); err != nil {
+			if err := beeper.PlayEmotion(normalized); err != nil {
 				logger.Printf("beep failed: %v", err)
 			}
 		}
@@ -159,6 +285,256 @@ func writePreview(emotion, outputPath string) error {
 	}
 	log.Printf("wrote %s preview to %s", emotion, outputPath)
 	return nil
+}
+
+func parseManualEmotion(raw string) (string, bool) {
+	normalized := normalizeEmotion(raw, "")
+	if normalized == "" {
+		return "", false
+	}
+	switch normalized {
+	case "happy", "excited", "sad", "calm", "sleep":
+		return normalized, true
+	default:
+		return "", false
+	}
+}
+
+func runManualEmotionMode(cfg config, initial string) error {
+	emotions := []string{"happy", "excited", "sad", "calm", "sleep"}
+	current := initial
+	if current == "" {
+		current = emotions[0]
+	}
+
+	r := &matrixRenderer{
+		binary: cfg.MatrixBinary,
+		args:   cfg.MatrixArgs,
+		anim:   cfg.AnimationTime,
+		width:  cfg.Width,
+		height: cfg.Height,
+	}
+	beeper := &beepPlayer{binary: cfg.SoundBinary, args: cfg.SoundArgs}
+	defer func() { _ = beeper.stop() }()
+	reader := bufio.NewReader(os.Stdin)
+	isTTY := isTerminal(int(os.Stdin.Fd()))
+	var restoreInput func()
+	if isTTY {
+		var err error
+		restoreInput, err = makeInputImmediate(int(os.Stdin.Fd()))
+		if err != nil {
+			return err
+		}
+		defer restoreInput()
+	}
+
+	showCurrent := func() error {
+		if err := beeper.PlayEmotion(current); err != nil {
+			return err
+		}
+		if err := r.Display(current); err != nil {
+			return err
+		}
+		fmt.Printf("active emotion: %s\n", current)
+		return nil
+	}
+	if err := showCurrent(); err != nil {
+		return err
+	}
+
+	for {
+		fmt.Println("Choose emotion: happy, excited, sad, calm, sleep, or q to quit")
+		if isTTY {
+			key, err := readManualKey()
+			if err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return err
+			}
+			switch key {
+			case "q", "Q":
+				return nil
+			case "up":
+				current = cycleEmotion(emotions, current, -1)
+			case "down":
+				current = cycleEmotion(emotions, current, 1)
+			case "enter":
+				continue
+			default:
+				if emotion, ok := parseManualEmotion(key); ok {
+					current = emotion
+				}
+			}
+			if err := showCurrent(); err != nil {
+				return err
+			}
+			continue
+		}
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		choice := strings.TrimSpace(strings.ToLower(input))
+		switch choice {
+		case "q", "quit", "exit":
+			return nil
+		case "":
+			continue
+		default:
+			emotion, ok := parseManualEmotion(choice)
+			if !ok {
+				fmt.Printf("unknown emotion: %q\n", choice)
+				continue
+			}
+			current = emotion
+			if err := showCurrent(); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func cycleEmotion(emotions []string, current string, delta int) string {
+	for i, emotion := range emotions {
+		if emotion == current {
+			idx := (i + delta + len(emotions)) % len(emotions)
+			return emotions[idx]
+		}
+	}
+	return emotions[0]
+}
+
+func readManualKey() (string, error) {
+	buf := make([]byte, 3)
+	if _, err := os.Stdin.Read(buf[:1]); err != nil {
+		return "", err
+	}
+	if buf[0] != 0x1b {
+		return string(buf[0]), nil
+	}
+	if _, err := os.Stdin.Read(buf[1:3]); err != nil {
+		return "", err
+	}
+	if len(buf) >= 3 && buf[1] == '[' {
+		switch buf[2] {
+		case 'A':
+			return "up", nil
+		case 'B':
+			return "down", nil
+		}
+	}
+	return "", nil
+}
+
+func isTerminal(fd int) bool {
+	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	return err == nil
+}
+
+func makeInputImmediate(fd int) (func(), error) {
+	original, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		return nil, err
+	}
+
+	immediate := *original
+	immediate.Lflag &^= unix.ICANON
+	immediate.Cc[unix.VMIN] = 1
+	immediate.Cc[unix.VTIME] = 0
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &immediate); err != nil {
+		return nil, err
+	}
+	return func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, original) }, nil
+}
+
+func writeSoundPreview(emotion, outputPath string) error {
+	emotion = normalizeEmotion(emotion, "happy")
+	if outputPath == "" {
+		outputPath = filepath.Join("previews", emotion+".wav")
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return err
+	}
+	if err := writeWAV(outputPath, emotionLoopSamples(emotion)); err != nil {
+		return err
+	}
+	log.Printf("wrote %s sound preview to %s", emotion, outputPath)
+	return nil
+}
+
+func writeWAV(path string, samples []int16) error {
+	const sampleRate = 22050
+	const bitsPerSample = 16
+	const channels = 1
+	dataLen := len(samples) * 2
+	buf := make([]byte, 44+dataLen)
+	copy(buf[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(36+dataLen))
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(buf[16:20], 16)
+	binary.LittleEndian.PutUint16(buf[20:22], 1)
+	binary.LittleEndian.PutUint16(buf[22:24], channels)
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(buf[28:32], uint32(sampleRate*channels*bitsPerSample/8))
+	binary.LittleEndian.PutUint16(buf[32:34], uint16(channels*bitsPerSample/8))
+	binary.LittleEndian.PutUint16(buf[34:36], bitsPerSample)
+	copy(buf[36:40], "data")
+	binary.LittleEndian.PutUint32(buf[40:44], uint32(dataLen))
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(buf[44+i*2:44+i*2+2], uint16(sample))
+	}
+	return os.WriteFile(path, buf, 0o644)
+}
+
+func emotionLoopSamples(emotion string) []int16 {
+	sampleRate := 22050
+	notes := map[string][]int{
+		"happy":   {659, 783, 880, 988, 1046, 988, 880, 783},
+		"excited": {880, 1174, 1046, 1174, 988, 1174, 1318, 1174},
+		"sad":     {220, 196, 174, 196, 174, 196, 174, 147},
+		"calm":    {392, 440, 392, 523, 440, 392, 349, 392},
+		"sleep":   {220, 196, 174, 147, 147, 174, 196, 220},
+	}
+	pattern, ok := notes[emotion]
+	if !ok {
+		pattern = notes["happy"]
+	}
+	length := int(2.0 * float64(sampleRate))
+	samples := make([]int16, length)
+	phase := 0.0
+	tempo := 0.18
+	noteIndex := 0
+	for i := 0; i < length; {
+		freq := pattern[noteIndex%len(pattern)]
+		noteSamples := int(tempo * float64(sampleRate))
+		for j := 0; j < noteSamples && i < length; j++ {
+			wave := math.Sin(2 * math.Pi * float64(freq) * (phase / float64(sampleRate)))
+			env := 1.0
+			if j < 220 {
+				env = float64(j) / 220.0
+			}
+			if j > noteSamples-220 {
+				env = float64(noteSamples-j) / 220.0
+			}
+			if i == 0 || i == length-1 {
+				env = 0.0
+			}
+			samples[i] = int16(12000 * env * wave)
+			i++
+			phase++
+		}
+		noteIndex++
+	}
+	for i := 0; i < 220 && i < len(samples); i++ {
+		samples[i] = int16(float64(samples[i]) * float64(i) / 220.0)
+		samples[len(samples)-1-i] = int16(float64(samples[len(samples)-1-i]) * float64(i) / 220.0)
+	}
+	return samples
 }
 
 func loadConfig() config {
@@ -218,6 +594,13 @@ func loadConfig() config {
 	}
 
 	soundArgs := []string{"-q", "-t", "sine", "-f", "880", "-l", "1"}
+	if raw := strings.TrimSpace(os.Getenv("SOUND_DEVICE")); raw != "" {
+		soundArgs = append([]string{"-q", "-D", raw, "-t", "sine", "-f", "880", "-l", "1"})
+	} else if isProductionEnv() {
+		soundArgs = []string{"-q", "-D", defaultProdSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
+	} else {
+		soundArgs = []string{"-q", "-D", defaultLocalSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
+	}
 	if raw := strings.TrimSpace(os.Getenv("SOUND_ARGS")); raw != "" {
 		soundArgs = splitArgs(raw)
 	}
@@ -235,6 +618,18 @@ func loadConfig() config {
 		SoundBinary:     soundBinary,
 		SoundArgs:       soundArgs,
 	}
+}
+
+func isProductionEnv() bool {
+	for _, key := range []string{"APP_ENV", "ENVIRONMENT", "PRODUCTION", "PROD"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			switch strings.ToLower(value) {
+			case "1", "true", "yes", "on", "production", "prod":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func splitArgs(raw string) []string {
@@ -333,7 +728,8 @@ func (r *matrixRenderer) displayAnimation(emotion string, anim *gif.GIF) error {
 
 	if _, err := exec.LookPath(r.binary); err != nil {
 		_ = os.Remove(outputPath)
-		return fmt.Errorf("matrix binary not found (%s): %w", r.binary, err)
+		log.Printf("matrix binary unavailable (%s): %v; skipping display", r.binary, err)
+		return nil
 	}
 
 	args := append([]string{}, r.args...)
@@ -643,7 +1039,7 @@ func drawClosedLashes(img *image.RGBA, cx, cy, radius, curve float64, c color.RG
 		x := cx + radius*position
 		xf := x - cx
 		y := cy + curve*xf*xf
-		for step := 0; step < 4; step++ {
+		for step := 0; step < 8; step++ {
 			setSafe(img, int(x), int(y+float64(step)), c)
 		}
 	}
@@ -725,7 +1121,7 @@ func renderSadEyeFrame(width, height int, blink float64, look float64) *image.RG
 	fillCircle(img, cx+pupilShift-pupilRadius*0.35, cy+outerRadius*0.12-pupilRadius*0.35, highlightRadius, white)
 	fillExpressionEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
 	fillLowerEyelid(img, cx, cy, outerRadius, blink, -0.005, 0)
-	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, -0.005, 0, 24, accent)
+	drawUpperLashes(img, cx, cy, outerRadius, blink, 0.66, 0.72, -0.005, 0, 4, accent)
 	drawEyebrow(img, cx, cy-outerRadius*0.90, outerRadius*0.82, -0.008, -0.10, accent)
 
 	return img

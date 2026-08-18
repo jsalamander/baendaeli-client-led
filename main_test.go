@@ -82,6 +82,53 @@ func TestWritePreview(t *testing.T) {
 	}
 }
 
+func TestWriteSoundPreview(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "sleep.wav")
+	if err := writeSoundPreview("sleep", outputPath); err != nil {
+		t.Fatalf("writeSoundPreview returned an error: %v", err)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read sound preview: %v", err)
+	}
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		t.Fatalf("expected RIFF/WAVE content, got %q", data[:12])
+	}
+}
+
+func TestDisplaySkipsWhenMatrixBinaryMissing(t *testing.T) {
+	r := &matrixRenderer{binary: "missing-matrix-binary", args: nil, width: 64, height: 64}
+	if err := r.Display("happy"); err != nil {
+		t.Fatalf("expected missing matrix binary to be ignored in headless mode, got %v", err)
+	}
+}
+
+func TestPlayEmotionWithoutSoundBinaryIsSilent(t *testing.T) {
+	player := &beepPlayer{binary: "definitely-missing-binary"}
+	if err := player.PlayEmotion("happy"); err != nil {
+		t.Fatalf("expected missing sound binary to be ignored, got %v", err)
+	}
+}
+
+func TestEmotionLoopSamplesFadeAtBoundary(t *testing.T) {
+	samples := emotionLoopSamples("sleep")
+	if len(samples) < 1000 {
+		t.Fatalf("loop too short: %d", len(samples))
+	}
+	first := absInt16(samples[0])
+	last := absInt16(samples[len(samples)-1])
+	if first > 200 || last > 200 {
+		t.Fatalf("expected loop boundary to fade to zero, got first=%d last=%d", first, last)
+	}
+}
+
+func absInt16(v int16) int {
+	if v < 0 {
+		return int(-v)
+	}
+	return int(v)
+}
+
 func TestRenderHappyEyeAnimation(t *testing.T) {
 	anim := renderHappyEyeAnimation(64, 64)
 	if len(anim.Image) == 0 {
@@ -158,6 +205,51 @@ func TestRenderSleepEyeAnimation(t *testing.T) {
 	if b.Dx() != 64 || b.Dy() != 64 {
 		t.Fatalf("unexpected frame size: %dx%d", b.Dx(), b.Dy())
 	}
+}
+
+func TestManualEmotionChoice(t *testing.T) {
+	for input, want := range map[string]string{
+		"happy":     "happy",
+		"  sleepy  ": "sleep",
+		"SAD":       "sad",
+		"calm":      "calm",
+		"quit":      "",
+		"hello":     "",
+	} {
+		got, ok := parseManualEmotion(input)
+		if want == "" {
+			if ok {
+				t.Fatalf("expected %q to be rejected, got %q", input, got)
+			}
+			continue
+		}
+		if !ok || got != want {
+			t.Fatalf("parseManualEmotion(%q) = %q, %v; want %q", input, got, ok, want)
+		}
+	}
+}
+
+func TestSleepLashesExtendFartherThanSadLashes(t *testing.T) {
+	sleep := renderSleepEyeFrame(64, 64, 0)
+	sad := renderSadEyeFrame(64, 64, 0, 0)
+
+	if maxPinkY(sleep) <= maxPinkY(sad) {
+		t.Fatalf("expected sleep lashes to extend farther than sad lashes: sleep=%d sad=%d", maxPinkY(sleep), maxPinkY(sad))
+	}
+}
+
+func maxPinkY(img *image.RGBA) int {
+	maxY := -1
+	for y := 0; y < img.Bounds().Dy(); y++ {
+		for x := 0; x < img.Bounds().Dx(); x++ {
+			if got := img.RGBAAt(x, y); got == (color.RGBA{185, 35, 100, 255}) {
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+	return maxY
 }
 
 func TestAllEmotionAnimations(t *testing.T) {
