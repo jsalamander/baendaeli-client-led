@@ -156,12 +156,14 @@ func TestEmotionLoopsFitWithinPollingInterval(t *testing.T) {
 }
 
 func TestEmotionPlaylistContainsEveryVariant(t *testing.T) {
+	const crossfadeSamples = 882
 	variants := emotionLoopVariants("calm")
 	playlist := emotionPlaylistSamples("calm")
 	expectedLength := 0
 	for _, samples := range variants {
 		expectedLength += len(samples)
 	}
+	expectedLength -= crossfadeSamples * (len(variants) - 1)
 	if len(playlist) != expectedLength {
 		t.Fatalf("playlist length is %d; want %d", len(playlist), expectedLength)
 	}

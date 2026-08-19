@@ -153,32 +153,20 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	if err := p.stop(); err != nil {
 		return err
 	}
-	variantSamples := emotionLoopVariants(emotion)
-	outputPaths := make([]string, 0, len(variantSamples))
-	for _, samples := range variantSamples {
-		path, err := os.CreateTemp("", "baendaeli-client-led-sound-*.wav")
-		if err != nil {
-			for _, outputPath := range outputPaths {
-				_ = os.Remove(outputPath)
-			}
-			return err
-		}
-		outputPath := path.Name()
-		if err := path.Close(); err != nil {
-			_ = os.Remove(outputPath)
-			return err
-		}
-		if err := writeWAV(outputPath, samples); err != nil {
-			_ = os.Remove(outputPath)
-			for _, previousPath := range outputPaths {
-				_ = os.Remove(previousPath)
-			}
-			return err
-		}
-		outputPaths = append(outputPaths, outputPath)
+	path, err := os.CreateTemp("", "baendaeli-client-led-sound-*.wav")
+	if err != nil {
+		return err
 	}
-
-	outputPath := outputPaths[0]
+	outputPath := path.Name()
+	if err := path.Close(); err != nil {
+		_ = os.Remove(outputPath)
+		return err
+	}
+	if err := writeWAV(outputPath, emotionPlaylistSamples(emotion)); err != nil {
+		_ = os.Remove(outputPath)
+		return err
+	}
+	outputPaths := []string{outputPath}
 	cmdArgs := append([]string{}, p.args...)
 	if p.binary == "ffplay" || p.binary == "play" {
 		cmdArgs = []string{"-nodisp", "-autoexit", "-loop", "0", outputPath}
@@ -194,25 +182,17 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if p.binary == "aplay" {
-		cmdArgsList := make([][]string, 0, len(outputPaths))
-		for _, outputPath := range outputPaths {
-			cmdArgsList = append(cmdArgsList, aplayArgs(p.args, outputPath))
-		}
+		cmdArgs := aplayArgs(p.args, outputPath)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			for ctx.Err() == nil {
-				for _, args := range cmdArgsList {
-					cmd := exec.CommandContext(ctx, p.binary, args...)
-					if err := cmd.Run(); err != nil {
-						if ctx.Err() == nil {
-							log.Printf("sound playback failed (%s): %v", p.binary, err)
-						}
-						return
+				cmd := exec.CommandContext(ctx, p.binary, cmdArgs...)
+				if err := cmd.Run(); err != nil {
+					if ctx.Err() == nil {
+						log.Printf("sound playback failed (%s): %v", p.binary, err)
 					}
-					if ctx.Err() != nil {
-						return
-					}
+					return
 				}
 			}
 		}()
@@ -587,14 +567,18 @@ func emotionLoopSamples(emotion string) []int16 {
 }
 
 func emotionPlaylistSamples(emotion string) []int16 {
+	const crossfadeSamples = 882
 	variants := emotionLoopVariants(emotion)
-	length := 0
-	for _, samples := range variants {
-		length += len(samples)
-	}
-	playlist := make([]int16, 0, length)
-	for _, samples := range variants {
-		playlist = append(playlist, samples...)
+	playlist := append([]int16{}, variants[0]...)
+	for _, samples := range variants[1:] {
+		overlap := min(crossfadeSamples, len(playlist), len(samples))
+		start := len(playlist) - overlap
+		for index := 0; index < overlap; index++ {
+			progress := float64(index+1) / float64(overlap+1)
+			mixed := float64(playlist[start+index])*(1-progress) + float64(samples[index])*progress
+			playlist[start+index] = int16(mixed)
+		}
+		playlist = append(playlist, samples[overlap:]...)
 	}
 	return playlist
 }
@@ -623,15 +607,23 @@ func emotionLoopVariants(emotion string) [][]int16 {
 		var samples []int16
 		for phraseIndex := 0; phraseIndex < 3; phraseIndex++ {
 			phrase := selected.phrases[(phraseIndex+variant)%len(selected.phrases)]
+			phraseStart := len(samples)
+			rootFrequency := float64(phrase[0]) / 2
+			noteSamples := int(selected.duration * sampleRate)
+			phraseSamples := len(phrase) * noteSamples
 			for noteIndex, frequency := range phrase {
-				noteSamples := int(selected.duration * sampleRate)
 				for sampleIndex := 0; sampleIndex < noteSamples; sampleIndex++ {
 					progress := float64(sampleIndex) / float64(noteSamples)
 					envelope := math.Min(1, progress*14) * math.Min(1, (1-progress)*9)
 					timePosition := float64(len(samples)) / sampleRate
-					wave := math.Sin(2*math.Pi*float64(frequency)*timePosition)*(1-selected.warmth) + math.Sin(4*math.Pi*float64(frequency)*timePosition)*selected.warmth
+					phraseProgress := float64(len(samples)-phraseStart) / float64(phraseSamples)
+					leadFrequency := float64(frequency)
+					lead := 0.66*math.Sin(2*math.Pi*leadFrequency*timePosition) + 0.10*math.Sin(4*math.Pi*leadFrequency*timePosition)
+					padEnvelope := math.Sin(math.Pi * phraseProgress)
+					harmony := padEnvelope * (0.13*math.Sin(2*math.Pi*rootFrequency*timePosition) + 0.07*math.Sin(2*math.Pi*rootFrequency*1.5*timePosition))
+					wave := lead + harmony
 					if emotion == "excited" && (noteIndex+variant)%2 == 0 {
-						wave += 0.12 * math.Sin(6*math.Pi*float64(frequency)*timePosition)
+						wave += 0.07 * math.Sin(4*math.Pi*leadFrequency*timePosition)
 					}
 					samples = append(samples, int16(10500*envelope*wave))
 				}
