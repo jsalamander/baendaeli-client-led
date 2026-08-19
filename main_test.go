@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -107,6 +108,14 @@ func TestPlayEmotionWithoutSoundBinaryIsSilent(t *testing.T) {
 	player := &beepPlayer{binary: "definitely-missing-binary"}
 	if err := player.PlayEmotion("happy"); err != nil {
 		t.Fatalf("expected missing sound binary to be ignored, got %v", err)
+	}
+}
+
+func TestSpeakerTestArgsKeepsConfiguredDevice(t *testing.T) {
+	got := speakerTestArgs([]string{"-q", "-D", "plughw:2,0", "-t", "sine", "-f", "880", "-l", "1"}, 174)
+	want := []string{"-q", "-D", "plughw:2,0", "-t", "sine", "-f", "174", "-l", "0"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("speakerTestArgs() = %q, want %q", got, want)
 	}
 }
 
@@ -209,12 +218,12 @@ func TestRenderSleepEyeAnimation(t *testing.T) {
 
 func TestManualEmotionChoice(t *testing.T) {
 	for input, want := range map[string]string{
-		"happy":     "happy",
+		"happy":      "happy",
 		"  sleepy  ": "sleep",
-		"SAD":       "sad",
-		"calm":      "calm",
-		"quit":      "",
-		"hello":     "",
+		"SAD":        "sad",
+		"calm":       "calm",
+		"quit":       "",
+		"hello":      "",
 	} {
 		got, ok := parseManualEmotion(input)
 		if want == "" {

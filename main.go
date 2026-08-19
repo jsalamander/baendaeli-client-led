@@ -156,7 +156,7 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	} else if p.binary == "aplay" {
 		cmdArgs = []string{"-q", "--loop=0", outputPath}
 	} else if p.binary == "speaker-test" {
-		cmdArgs = []string{"-q", "-t", "sine", "-f", fmt.Sprintf("%d", emotionBaseFrequency(emotion)), "-l", "0"}
+		cmdArgs = speakerTestArgs(p.args, emotionBaseFrequency(emotion))
 		_ = os.Remove(outputPath)
 		outputPath = ""
 	}
@@ -174,6 +174,23 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	p.currentCancel = cancel
 	p.currentPath = outputPath
 	return nil
+}
+
+func speakerTestArgs(args []string, frequency int) []string {
+	result := make([]string, 0, len(args)+4)
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "-f", "--frequency", "-l", "--loop":
+			index++
+			continue
+		}
+		if strings.HasPrefix(arg, "--frequency=") || strings.HasPrefix(arg, "--loop=") {
+			continue
+		}
+		result = append(result, arg)
+	}
+	return append(result, "-f", strconv.Itoa(frequency), "-l", "0")
 }
 
 func emotionBaseFrequency(emotion string) int {
