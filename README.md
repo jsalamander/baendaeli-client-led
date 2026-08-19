@@ -26,9 +26,10 @@ The binary is configured through environment variables:
 - `FALLBACK_EMOTION` (default: `happy`)
 - `MATRIX_BINARY` (default: `led-image-viewer`)
 - `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping, including a 90-degree clockwise correction)
-- `SOUND_ENABLED` (default: `true`; set to `false` to disable the beep)
-- `SOUND_BINARY` (default: `speaker-test`)
-- `SOUND_ARGS` (optional; defaults to a short 880 Hz tone)
+- `SOUND_ENABLED` (default: `true`; set to `false` to disable emotion audio)
+- `SOUND_BINARY` (default: `aplay`)
+- `SOUND_DEVICE` (optional ALSA device, such as `plughw:2,0`)
+- `SOUND_ARGS` (optional arguments for `SOUND_BINARY`)
 
 You can place these in `/opt/baendaeli-client-led/.env` for systemd.
 
@@ -40,7 +41,7 @@ go build ./...
 ```
 
 To hear the generated emotion loops in `--manual` mode on Linux, install the
-ALSA utilities, which provide the default `speaker-test` audio backend:
+ALSA utilities, which provide the default `aplay` audio backend:
 
 ```bash
 sudo apt-get install alsa-utils

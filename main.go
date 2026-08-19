@@ -32,7 +32,7 @@ const (
 	defaultPollInterval     = 2 * time.Second
 	defaultMatrixBinary     = "led-image-viewer"
 	defaultMatrixMapping    = "adafruit-hat"
-	defaultSoundBinary      = "speaker-test"
+	defaultSoundBinary      = "aplay"
 	defaultLocalSoundDevice = "default"
 	defaultProdSoundDevice  = "plughw:1,0"
 	eyelashCount            = 5
@@ -88,7 +88,7 @@ type beepPlayer struct {
 }
 
 func resolveSoundBinary(binary string) string {
-	for _, candidate := range []string{binary, "ffplay", "play", "aplay"} {
+	for _, candidate := range []string{binary, "aplay", "ffplay", "play", "speaker-test"} {
 		if candidate == "" {
 			continue
 		}
@@ -125,7 +125,7 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	p.binary = resolveSoundBinary(p.binary)
 	if _, err := exec.LookPath(p.binary); err != nil {
 		if !p.warnedUnavailable {
-			log.Printf("sound binary unavailable (%s): %v; install alsa-utils for speaker-test or configure SOUND_BINARY", p.binary, err)
+			log.Printf("sound binary unavailable (%s): %v; install alsa-utils for aplay or configure SOUND_BINARY", p.binary, err)
 			p.warnedUnavailable = true
 		}
 		return nil
@@ -154,7 +154,7 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 			cmdArgs = []string{"-q", outputPath, "repeat", "0"}
 		}
 	} else if p.binary == "aplay" {
-		cmdArgs = []string{"-q", "--loop=0", outputPath}
+		cmdArgs = aplayArgs(p.args, outputPath)
 	} else if p.binary == "speaker-test" {
 		cmdArgs = speakerTestArgs(p.args, emotionBaseFrequency(emotion))
 		_ = os.Remove(outputPath)
@@ -176,6 +176,11 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	return nil
 }
 
+func aplayArgs(args []string, outputPath string) []string {
+	result := append([]string{}, args...)
+	return append(result, "-q", "--loop=0", outputPath)
+}
+
 func speakerTestArgs(args []string, frequency int) []string {
 	result := make([]string, 0, len(args)+4)
 	for index := 0; index < len(args); index++ {
@@ -183,16 +188,16 @@ func speakerTestArgs(args []string, frequency int) []string {
 		switch arg {
 		case "-q", "--quiet":
 			continue
-		case "-f", "--frequency", "-l", "--loop":
+		case "-f", "--frequency", "-l", "--loop", "-t", "--test":
 			index++
 			continue
 		}
-		if strings.HasPrefix(arg, "--frequency=") || strings.HasPrefix(arg, "--loop=") {
+		if strings.HasPrefix(arg, "--frequency=") || strings.HasPrefix(arg, "--loop=") || strings.HasPrefix(arg, "--test=") {
 			continue
 		}
 		result = append(result, arg)
 	}
-	return append(result, "-f", strconv.Itoa(frequency), "-l", "0")
+	return append(result, "-t", "sine", "-f", strconv.Itoa(frequency), "-l", "0")
 }
 
 func emotionBaseFrequency(emotion string) int {
@@ -612,13 +617,13 @@ func loadConfig() config {
 		soundBinary = defaultSoundBinary
 	}
 
-	soundArgs := []string{"-t", "sine", "-f", "880", "-l", "1"}
+	soundArgs := []string{}
 	if raw := strings.TrimSpace(os.Getenv("SOUND_DEVICE")); raw != "" {
-		soundArgs = append([]string{"-D", raw, "-t", "sine", "-f", "880", "-l", "1"})
+		soundArgs = append([]string{"-D", raw})
 	} else if isProductionEnv() {
-		soundArgs = []string{"-D", defaultProdSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
+		soundArgs = []string{"-D", defaultProdSoundDevice}
 	} else {
-		soundArgs = []string{"-D", defaultLocalSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
+		soundArgs = []string{"-D", defaultLocalSoundDevice}
 	}
 	if raw := strings.TrimSpace(os.Getenv("SOUND_ARGS")); raw != "" {
 		soundArgs = splitArgs(raw)

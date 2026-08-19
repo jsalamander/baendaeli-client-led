@@ -119,6 +119,14 @@ func TestSpeakerTestArgsKeepsConfiguredDeviceAndDropsQuietFlag(t *testing.T) {
 	}
 }
 
+func TestAplayArgsKeepsConfiguredDevice(t *testing.T) {
+	got := aplayArgs([]string{"-D", "plughw:2,0"}, "emotion.wav")
+	want := []string{"-D", "plughw:2,0", "-q", "--loop=0", "emotion.wav"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("aplayArgs() = %q, want %q", got, want)
+	}
+}
+
 func TestEmotionLoopSamplesFadeAtBoundary(t *testing.T) {
 	samples := emotionLoopSamples("sleep")
 	if len(samples) < 1000 {
