@@ -27,7 +27,7 @@ The binary is configured through environment variables:
 - `MATRIX_BINARY` (default: `led-image-viewer`)
 - `MATRIX_ARGS` (optional; defaults set for 64x64 panel + Adafruit HAT mapping, including a 90-degree clockwise correction)
 - `SOUND_ENABLED` (default: `true`; set to `false` to disable emotion audio)
-- `SOUND_BINARY` (default: `aplay`)
+- `SOUND_BINARY` (default: `aplay`; restarted by the client to loop emotion WAVs)
 - `SOUND_DEVICE` (optional ALSA device, such as `plughw:2,0`)
 - `SOUND_ARGS` (optional arguments for `SOUND_BINARY`)
 

@@ -83,6 +83,7 @@ type beepPlayer struct {
 	currentEmotion    string
 	currentCmd        *exec.Cmd
 	currentCancel     context.CancelFunc
+	currentDone       <-chan struct{}
 	currentPath       string
 	warnedUnavailable bool
 }
@@ -100,21 +101,36 @@ func resolveSoundBinary(binary string) string {
 }
 
 func (p *beepPlayer) stop() error {
-	if p.currentCmd == nil {
+	if p.currentCancel == nil {
 		return nil
 	}
-	if p.currentCancel != nil {
-		p.currentCancel()
+	p.currentCancel()
+	if p.currentDone != nil {
+		<-p.currentDone
+	} else if p.currentCmd != nil {
+		_ = p.currentCmd.Wait()
 	}
-	_ = p.currentCmd.Wait()
 	if p.currentPath != "" {
 		_ = os.Remove(p.currentPath)
 	}
 	p.currentEmotion = ""
 	p.currentCmd = nil
 	p.currentCancel = nil
+	p.currentDone = nil
 	p.currentPath = ""
 	return nil
+}
+
+func (p *beepPlayer) isPlaying(emotion string) bool {
+	if p.currentEmotion != emotion || p.currentCancel == nil || p.currentDone == nil {
+		return false
+	}
+	select {
+	case <-p.currentDone:
+		return false
+	default:
+		return true
+	}
 }
 
 func (p *beepPlayer) PlayEmotion(emotion string) error {
@@ -130,7 +146,7 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 		}
 		return nil
 	}
-	if p.currentEmotion == emotion && p.currentCmd != nil && p.currentCmd.Process != nil {
+	if p.isPlaying(emotion) {
 		return nil
 	}
 	if err := p.stop(); err != nil {
@@ -161,6 +177,26 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 		outputPath = ""
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	if p.binary == "aplay" {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for ctx.Err() == nil {
+				cmd := exec.CommandContext(ctx, p.binary, cmdArgs...)
+				if err := cmd.Run(); err != nil {
+					if ctx.Err() == nil {
+						log.Printf("sound playback failed (%s): %v", p.binary, err)
+					}
+					return
+				}
+			}
+		}()
+		p.currentEmotion = emotion
+		p.currentCancel = cancel
+		p.currentDone = done
+		p.currentPath = outputPath
+		return nil
+	}
 	cmd := exec.CommandContext(ctx, p.binary, cmdArgs...)
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -172,13 +208,19 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	p.currentEmotion = emotion
 	p.currentCmd = cmd
 	p.currentCancel = cancel
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	p.currentDone = done
 	p.currentPath = outputPath
 	return nil
 }
 
 func aplayArgs(args []string, outputPath string) []string {
 	result := append([]string{}, args...)
-	return append(result, "-q", "--loop=0", outputPath)
+	return append(result, "-q", outputPath)
 }
 
 func speakerTestArgs(args []string, frequency int) []string {
