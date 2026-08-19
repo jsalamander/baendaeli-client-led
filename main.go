@@ -181,6 +181,8 @@ func speakerTestArgs(args []string, frequency int) []string {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
+		case "-q", "--quiet":
+			continue
 		case "-f", "--frequency", "-l", "--loop":
 			index++
 			continue
@@ -610,13 +612,13 @@ func loadConfig() config {
 		soundBinary = defaultSoundBinary
 	}
 
-	soundArgs := []string{"-q", "-t", "sine", "-f", "880", "-l", "1"}
+	soundArgs := []string{"-t", "sine", "-f", "880", "-l", "1"}
 	if raw := strings.TrimSpace(os.Getenv("SOUND_DEVICE")); raw != "" {
-		soundArgs = append([]string{"-q", "-D", raw, "-t", "sine", "-f", "880", "-l", "1"})
+		soundArgs = append([]string{"-D", raw, "-t", "sine", "-f", "880", "-l", "1"})
 	} else if isProductionEnv() {
-		soundArgs = []string{"-q", "-D", defaultProdSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
+		soundArgs = []string{"-D", defaultProdSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
 	} else {
-		soundArgs = []string{"-q", "-D", defaultLocalSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
+		soundArgs = []string{"-D", defaultLocalSoundDevice, "-t", "sine", "-f", "880", "-l", "1"}
 	}
 	if raw := strings.TrimSpace(os.Getenv("SOUND_ARGS")); raw != "" {
 		soundArgs = splitArgs(raw)

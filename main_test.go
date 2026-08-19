@@ -111,9 +111,9 @@ func TestPlayEmotionWithoutSoundBinaryIsSilent(t *testing.T) {
 	}
 }
 
-func TestSpeakerTestArgsKeepsConfiguredDevice(t *testing.T) {
+func TestSpeakerTestArgsKeepsConfiguredDeviceAndDropsQuietFlag(t *testing.T) {
 	got := speakerTestArgs([]string{"-q", "-D", "plughw:2,0", "-t", "sine", "-f", "880", "-l", "1"}, 174)
-	want := []string{"-q", "-D", "plughw:2,0", "-t", "sine", "-f", "174", "-l", "0"}
+	want := []string{"-D", "plughw:2,0", "-t", "sine", "-f", "174", "-l", "0"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("speakerTestArgs() = %q, want %q", got, want)
 	}
