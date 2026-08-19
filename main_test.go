@@ -139,6 +139,34 @@ func TestEmotionLoopSamplesFadeAtBoundary(t *testing.T) {
 	}
 }
 
+func TestEmotionLoopsFitWithinPollingInterval(t *testing.T) {
+	const sampleRate = 22050
+	maxSamples := int(emotionLoopMaxDuration.Seconds() * sampleRate)
+	for _, emotion := range []string{"happy", "excited", "sad", "calm", "sleep"} {
+		variants := emotionLoopVariants(emotion)
+		if len(variants) != 3 {
+			t.Fatalf("%s has %d variants; want 3", emotion, len(variants))
+		}
+		for variant, samples := range variants {
+			if len(samples) > maxSamples {
+				t.Fatalf("%s variant %d is %d samples; maximum is %d", emotion, variant, len(samples), maxSamples)
+			}
+		}
+	}
+}
+
+func TestEmotionPlaylistContainsEveryVariant(t *testing.T) {
+	variants := emotionLoopVariants("calm")
+	playlist := emotionPlaylistSamples("calm")
+	expectedLength := 0
+	for _, samples := range variants {
+		expectedLength += len(samples)
+	}
+	if len(playlist) != expectedLength {
+		t.Fatalf("playlist length is %d; want %d", len(playlist), expectedLength)
+	}
+}
+
 func absInt16(v int16) int {
 	if v < 0 {
 		return int(-v)

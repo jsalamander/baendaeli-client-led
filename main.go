@@ -30,6 +30,7 @@ import (
 const (
 	defaultAPIURL           = "https://www.baendae.li/api/public/tamagotchi"
 	defaultPollInterval     = 2 * time.Second
+	emotionLoopMaxDuration  = defaultPollInterval - 40*time.Millisecond
 	defaultMatrixBinary     = "led-image-viewer"
 	defaultMatrixMapping    = "adafruit-hat"
 	defaultSoundBinary      = "aplay"
@@ -84,7 +85,7 @@ type beepPlayer struct {
 	currentCmd        *exec.Cmd
 	currentCancel     context.CancelFunc
 	currentDone       <-chan struct{}
-	currentPath       string
+	currentPaths      []string
 	warnedUnavailable bool
 }
 
@@ -110,14 +111,14 @@ func (p *beepPlayer) stop() error {
 	} else if p.currentCmd != nil {
 		_ = p.currentCmd.Wait()
 	}
-	if p.currentPath != "" {
-		_ = os.Remove(p.currentPath)
+	for _, path := range p.currentPaths {
+		_ = os.Remove(path)
 	}
 	p.currentEmotion = ""
 	p.currentCmd = nil
 	p.currentCancel = nil
 	p.currentDone = nil
-	p.currentPath = ""
+	p.currentPaths = nil
 	return nil
 }
 
@@ -152,17 +153,32 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	if err := p.stop(); err != nil {
 		return err
 	}
-	samples := emotionLoopSamples(emotion)
-	path, err := os.CreateTemp("", "baendaeli-client-led-sound-*.wav")
-	if err != nil {
-		return err
+	variantSamples := emotionLoopVariants(emotion)
+	outputPaths := make([]string, 0, len(variantSamples))
+	for _, samples := range variantSamples {
+		path, err := os.CreateTemp("", "baendaeli-client-led-sound-*.wav")
+		if err != nil {
+			for _, outputPath := range outputPaths {
+				_ = os.Remove(outputPath)
+			}
+			return err
+		}
+		outputPath := path.Name()
+		if err := path.Close(); err != nil {
+			_ = os.Remove(outputPath)
+			return err
+		}
+		if err := writeWAV(outputPath, samples); err != nil {
+			_ = os.Remove(outputPath)
+			for _, previousPath := range outputPaths {
+				_ = os.Remove(previousPath)
+			}
+			return err
+		}
+		outputPaths = append(outputPaths, outputPath)
 	}
-	path.Close()
-	outputPath := path.Name()
-	if err := writeWAV(outputPath, samples); err != nil {
-		_ = os.Remove(outputPath)
-		return err
-	}
+
+	outputPath := outputPaths[0]
 	cmdArgs := append([]string{}, p.args...)
 	if p.binary == "ffplay" || p.binary == "play" {
 		cmdArgs = []string{"-nodisp", "-autoexit", "-loop", "0", outputPath}
@@ -178,29 +194,38 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if p.binary == "aplay" {
+		cmdArgsList := make([][]string, 0, len(outputPaths))
+		for _, outputPath := range outputPaths {
+			cmdArgsList = append(cmdArgsList, aplayArgs(p.args, outputPath))
+		}
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			for ctx.Err() == nil {
-				cmd := exec.CommandContext(ctx, p.binary, cmdArgs...)
-				if err := cmd.Run(); err != nil {
-					if ctx.Err() == nil {
-						log.Printf("sound playback failed (%s): %v", p.binary, err)
+				for _, args := range cmdArgsList {
+					cmd := exec.CommandContext(ctx, p.binary, args...)
+					if err := cmd.Run(); err != nil {
+						if ctx.Err() == nil {
+							log.Printf("sound playback failed (%s): %v", p.binary, err)
+						}
+						return
 					}
-					return
+					if ctx.Err() != nil {
+						return
+					}
 				}
 			}
 		}()
 		p.currentEmotion = emotion
 		p.currentCancel = cancel
 		p.currentDone = done
-		p.currentPath = outputPath
+		p.currentPaths = outputPaths
 		return nil
 	}
 	cmd := exec.CommandContext(ctx, p.binary, cmdArgs...)
 	if err := cmd.Start(); err != nil {
 		cancel()
-		if outputPath != "" {
+		for _, outputPath := range outputPaths {
 			_ = os.Remove(outputPath)
 		}
 		return err
@@ -214,7 +239,7 @@ func (p *beepPlayer) PlayEmotion(emotion string) error {
 		close(done)
 	}()
 	p.currentDone = done
-	p.currentPath = outputPath
+	p.currentPaths = outputPaths
 	return nil
 }
 
@@ -525,7 +550,7 @@ func writeSoundPreview(emotion, outputPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return err
 	}
-	if err := writeWAV(outputPath, emotionLoopSamples(emotion)); err != nil {
+	if err := writeWAV(outputPath, emotionPlaylistSamples(emotion)); err != nil {
 		return err
 	}
 	log.Printf("wrote %s sound preview to %s", emotion, outputPath)
@@ -558,49 +583,69 @@ func writeWAV(path string, samples []int16) error {
 }
 
 func emotionLoopSamples(emotion string) []int16 {
-	sampleRate := 22050
-	notes := map[string][]int{
-		"happy":   {659, 783, 880, 988, 1046, 988, 880, 783},
-		"excited": {880, 1174, 1046, 1174, 988, 1174, 1318, 1174},
-		"sad":     {220, 196, 174, 196, 174, 196, 174, 147},
-		"calm":    {392, 440, 392, 523, 440, 392, 349, 392},
-		"sleep":   {220, 196, 174, 147, 147, 174, 196, 220},
+	return emotionLoopVariants(emotion)[0]
+}
+
+func emotionPlaylistSamples(emotion string) []int16 {
+	variants := emotionLoopVariants(emotion)
+	length := 0
+	for _, samples := range variants {
+		length += len(samples)
 	}
-	pattern, ok := notes[emotion]
+	playlist := make([]int16, 0, length)
+	for _, samples := range variants {
+		playlist = append(playlist, samples...)
+	}
+	return playlist
+}
+
+func emotionLoopVariants(emotion string) [][]int16 {
+	const sampleRate = 22050
+	type composition struct {
+		phrases  [][]int
+		duration float64
+		warmth   float64
+	}
+	compositions := map[string]composition{
+		"happy":   {[][]int{{659, 783, 880, 988}, {783, 880, 1046, 988}, {659, 880, 988, 1174}, {1046, 988, 880, 783}}, 0.15, 0.18},
+		"excited": {[][]int{{880, 1046, 1174, 1318, 1174, 1046}, {988, 1174, 1396, 1174, 1318, 1568}, {880, 1174, 1318, 1568, 1396, 1174}, {1046, 1318, 1568, 1760, 1568, 1318}}, 0.10, 0.08},
+		"sad":     {[][]int{{220, 196, 174, 196}, {220, 196, 174, 147}, {196, 174, 164, 147}, {174, 196, 174, 147}}, 0.15, 0.30},
+		"calm":    {[][]int{{392, 440, 523, 440}, {392, 349, 392, 440}, {523, 440, 392, 349}, {392, 440, 392, 330}}, 0.15, 0.38},
+		"sleep":   {[][]int{{220, 196, 174, 147}, {196, 174, 147, 131}, {174, 147, 131, 147}, {147, 174, 196, 174}}, 0.15, 0.48},
+	}
+	selected, ok := compositions[emotion]
 	if !ok {
-		pattern = notes["happy"]
+		selected = compositions["happy"]
 	}
-	length := int(2.0 * float64(sampleRate))
-	samples := make([]int16, length)
-	phase := 0.0
-	tempo := 0.18
-	noteIndex := 0
-	for i := 0; i < length; {
-		freq := pattern[noteIndex%len(pattern)]
-		noteSamples := int(tempo * float64(sampleRate))
-		for j := 0; j < noteSamples && i < length; j++ {
-			wave := math.Sin(2 * math.Pi * float64(freq) * (phase / float64(sampleRate)))
-			env := 1.0
-			if j < 220 {
-				env = float64(j) / 220.0
+
+	variants := make([][]int16, 3)
+	for variant := range variants {
+		var samples []int16
+		for phraseIndex := 0; phraseIndex < 3; phraseIndex++ {
+			phrase := selected.phrases[(phraseIndex+variant)%len(selected.phrases)]
+			for noteIndex, frequency := range phrase {
+				noteSamples := int(selected.duration * sampleRate)
+				for sampleIndex := 0; sampleIndex < noteSamples; sampleIndex++ {
+					progress := float64(sampleIndex) / float64(noteSamples)
+					envelope := math.Min(1, progress*14) * math.Min(1, (1-progress)*9)
+					timePosition := float64(len(samples)) / sampleRate
+					wave := math.Sin(2*math.Pi*float64(frequency)*timePosition)*(1-selected.warmth) + math.Sin(4*math.Pi*float64(frequency)*timePosition)*selected.warmth
+					if emotion == "excited" && (noteIndex+variant)%2 == 0 {
+						wave += 0.12 * math.Sin(6*math.Pi*float64(frequency)*timePosition)
+					}
+					samples = append(samples, int16(10500*envelope*wave))
+				}
 			}
-			if j > noteSamples-220 {
-				env = float64(noteSamples-j) / 220.0
-			}
-			if i == 0 || i == length-1 {
-				env = 0.0
-			}
-			samples[i] = int16(12000 * env * wave)
-			i++
-			phase++
 		}
-		noteIndex++
+		fadeSamples := int(0.04 * sampleRate)
+		for index := 0; index < fadeSamples && index < len(samples); index++ {
+			gain := float64(index) / float64(fadeSamples)
+			samples[index] = int16(float64(samples[index]) * gain)
+			samples[len(samples)-1-index] = int16(float64(samples[len(samples)-1-index]) * gain)
+		}
+		variants[variant] = samples
 	}
-	for i := 0; i < 220 && i < len(samples); i++ {
-		samples[i] = int16(float64(samples[i]) * float64(i) / 220.0)
-		samples[len(samples)-1-i] = int16(float64(samples[len(samples)-1-i]) * float64(i) / 220.0)
-	}
-	return samples
+	return variants
 }
 
 func loadConfig() config {
@@ -617,14 +662,9 @@ func loadConfig() config {
 	}
 
 	matrixArgs := []string{
-		"--led-rows=64",
-		"--led-cols=64",
-		"--led-chain=1",
-		"--led-parallel=1",
-		fmt.Sprintf("--led-gpio-mapping=%s", defaultMatrixMapping),
-		"--led-pixel-mapper=Rotate:90",
-		"--led-brightness=60",
-		"--led-no-drop-privs",
+		"--led-rows=64", "--led-cols=64", "--led-chain=1", "--led-parallel=1",
+		fmt.Sprintf("--led-gpio-mapping=%s", defaultMatrixMapping), "--led-pixel-mapper=Rotate:90",
+		"--led-brightness=60", "--led-no-drop-privs",
 	}
 	if raw := strings.TrimSpace(os.Getenv("MATRIX_ARGS")); raw != "" {
 		matrixArgs = splitArgs(raw)
