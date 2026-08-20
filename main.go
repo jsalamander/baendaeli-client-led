@@ -35,7 +35,7 @@ const (
 	defaultMatrixMapping    = "adafruit-hat"
 	defaultSoundBinary      = "aplay"
 	defaultLocalSoundDevice = "default"
-	defaultProdSoundDevice  = "plughw:1,0"
+	defaultProdSoundDevice  = "plughw:2,0"
 	eyelashCount            = 5
 )
 

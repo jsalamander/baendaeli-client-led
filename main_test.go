@@ -127,6 +127,14 @@ func TestAplayArgsKeepsConfiguredDevice(t *testing.T) {
 	}
 }
 
+func TestLoadConfigUsesUSBAudioCard2InProduction(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	cfg := loadConfig()
+	if len(cfg.SoundArgs) < 2 || cfg.SoundArgs[0] != "-D" || cfg.SoundArgs[1] != "plughw:2,0" {
+		t.Fatalf("production SoundArgs = %v, want [-D plughw:2,0]", cfg.SoundArgs)
+	}
+}
+
 func TestEmotionLoopSamplesFadeAtBoundary(t *testing.T) {
 	samples := emotionLoopSamples("sleep")
 	if len(samples) < 1000 {
